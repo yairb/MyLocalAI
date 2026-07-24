@@ -1,0 +1,3 @@
+# Optional: place a bundled llama-server binary here for distribution.
+# Prefer user-installed llama.cpp via Homebrew for development:
+#   brew install llama.cpp
