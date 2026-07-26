@@ -1,4 +1,7 @@
 use crate::db::Database;
+use crate::image_gen::{
+    copy_image_file, image_models_dir, list_image_models, reveal_in_finder, ImageGenManager,
+};
 use crate::llama::{list_gguf_models, models_dir, LlamaManager};
 use crate::models::*;
 use serde_json::Value;
@@ -9,6 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 pub struct AppState {
     pub db: Database,
     pub llama: Arc<LlamaManager>,
+    pub image_gen: Arc<ImageGenManager>,
 }
 
 #[tauri::command]
@@ -152,4 +156,119 @@ pub fn list_local_models() -> Vec<String> {
 #[tauri::command]
 pub fn list_memories(state: State<'_, AppState>) -> Result<Vec<Memory>, String> {
     state.db.list_memories()
+}
+
+// ── Image generation ───────────────────────────────────────────
+
+#[tauri::command]
+pub fn pick_image_model_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let default_dir = image_models_dir();
+    let file = app
+        .dialog()
+        .file()
+        .add_filter("Stable Diffusion models", &["safetensors", "ckpt", "gguf"])
+        .set_directory(default_dir)
+        .set_title("Select Stable Diffusion model")
+        .blocking_pick_file();
+
+    Ok(file
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub fn get_image_models_dir() -> String {
+    image_models_dir().to_string_lossy().into_owned()
+}
+
+#[tauri::command]
+pub fn list_local_image_models() -> Vec<String> {
+    list_image_models()
+}
+
+#[tauri::command]
+pub async fn generate_image(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    params: ImageGenerateParams,
+) -> Result<ImageGenerateResult, String> {
+    let settings = state.db.get_settings()?;
+    let manager = Arc::clone(&state.image_gen);
+    let binary = settings.image_binary_path.clone();
+    let backend = Some(settings.image_backend.clone());
+
+    // Run on a blocking thread so the async runtime stays free
+    tauri::async_runtime::spawn_blocking(move || manager.generate(app, params, binary, backend))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn cancel_image_generation(state: State<'_, AppState>) -> Result<(), String> {
+    state.image_gen.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn is_image_generating(state: State<'_, AppState>) -> bool {
+    state.image_gen.is_busy()
+}
+
+#[tauri::command]
+pub fn create_generated_image(
+    state: State<'_, AppState>,
+    input: CreateGeneratedImageInput,
+) -> Result<GeneratedImage, String> {
+    state.db.create_generated_image(input)
+}
+
+#[tauri::command]
+pub fn delete_message(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let image_path = state.db.delete_message(&id)?;
+    if let Some(path) = image_path {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reveal_image_in_finder(path: String) -> Result<(), String> {
+    reveal_in_finder(&path)
+}
+
+#[tauri::command]
+pub fn save_image_as(app: tauri::AppHandle, source_path: String) -> Result<Option<String>, String> {
+    let default_name = std::path::Path::new(&source_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image.png");
+
+    let file = app
+        .dialog()
+        .file()
+        .set_file_name(default_name)
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+        .set_title("Save image")
+        .blocking_save_file();
+
+    match file {
+        Some(fp) => {
+            let dest = fp
+                .into_path()
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned();
+            copy_image_file(&source_path, &dest)?;
+            Ok(Some(dest))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub fn search_conversations(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<Conversation>, String> {
+    state.db.search_conversations(&query)
 }

@@ -3,6 +3,7 @@ import type {
   Character,
   Conversation,
   CreateCharacterInput,
+  GeneratedImage,
   Message,
   Role,
   UpdateCharacterInput,
@@ -15,6 +16,7 @@ const STORAGE_KEYS = {
   messages: 'mla_messages',
   characters: 'mla_characters',
   settings: 'mla_settings',
+  images: 'mla_generated_images',
 } as const
 
 const DEFAULT_CHARACTERS: Omit<Character, 'id' | 'created_at'>[] = [
@@ -60,6 +62,20 @@ const DEFAULT_SETTINGS: AppSettings = {
   llama_host: '127.0.0.1',
   llama_port: 8080,
   llama_binary_path: null,
+  image_model_path: null,
+  image_model_name: null,
+  image_resolution: '512x512',
+  image_steps: 20,
+  image_cfg_scale: 7,
+  image_sampler: 'euler_a',
+  image_seed: -1,
+  image_random_seed: true,
+  image_enhance_prompt: true,
+  image_format: 'png',
+  image_backend: 'mlx',
+  image_binary_path: null,
+  image_negative_prompt:
+    'blurry, low quality, distorted, deformed, ugly, bad anatomy, watermark, text',
 }
 
 function nowIso() {
@@ -101,6 +117,9 @@ function ensureLocalSeed() {
   }
   if (!localStorage.getItem(STORAGE_KEYS.settings)) {
     writeLocal(STORAGE_KEYS.settings, DEFAULT_SETTINGS)
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.images)) {
+    writeLocal(STORAGE_KEYS.images, [])
   }
 }
 
@@ -168,6 +187,10 @@ export async function deleteConversation(id: string): Promise<void> {
     (m) => m.conversation_id !== id,
   )
   writeLocal(STORAGE_KEYS.messages, messages)
+  const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, []).filter(
+    (img) => img.conversation_id !== id,
+  )
+  writeLocal(STORAGE_KEYS.images, images)
 }
 
 export async function touchConversation(id: string): Promise<void> {
@@ -189,8 +212,16 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
     return tauriInvoke<Message[]>('list_messages', { conversationId })
   }
   ensureLocalSeed()
+  const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, [])
   return readLocal<Message[]>(STORAGE_KEYS.messages, [])
     .filter((m) => m.conversation_id === conversationId)
+    .map((m) => {
+      if (m.role === 'image') {
+        const image = images.find((img) => img.message_id === m.id) ?? null
+        return { ...m, image }
+      }
+      return m
+    })
     .sort(
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     )
@@ -294,13 +325,91 @@ export async function deleteCharacter(id: string): Promise<void> {
 
 export async function getSettings(): Promise<AppSettings> {
   if (isTauri()) {
-    return tauriInvoke<AppSettings>('get_settings')
+    const settings = await tauriInvoke<AppSettings>('get_settings')
+    return { ...DEFAULT_SETTINGS, ...settings }
   }
   ensureLocalSeed()
   return {
     ...DEFAULT_SETTINGS,
     ...readLocal<AppSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS),
   }
+}
+
+// ── Generated images ───────────────────────────────────────────
+
+export interface CreateGeneratedImageInput {
+  conversation_id: string
+  message_id: string
+  original_prompt: string
+  enhanced_prompt: string
+  image_path: string
+  width: number
+  height: number
+  seed: number
+  sampler: string
+  steps: number
+  cfg: number
+  generation_time_ms: number
+}
+
+export async function createGeneratedImage(
+  input: CreateGeneratedImageInput,
+): Promise<GeneratedImage> {
+  if (isTauri()) {
+    return tauriInvoke<GeneratedImage>('create_generated_image', { input })
+  }
+  const image: GeneratedImage = {
+    id: createId(),
+    ...input,
+    created_at: nowIso(),
+  }
+  const items = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, [])
+  items.push(image)
+  writeLocal(STORAGE_KEYS.images, items)
+  return image
+}
+
+export async function deleteMessage(id: string): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('delete_message', { id })
+  }
+  const messages = readLocal<Message[]>(STORAGE_KEYS.messages, []).filter(
+    (m) => m.id !== id,
+  )
+  writeLocal(STORAGE_KEYS.messages, messages)
+  const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, []).filter(
+    (img) => img.message_id !== id,
+  )
+  writeLocal(STORAGE_KEYS.images, images)
+}
+
+export async function searchConversations(query: string): Promise<Conversation[]> {
+  if (isTauri()) {
+    return tauriInvoke<Conversation[]>('search_conversations', { query })
+  }
+  ensureLocalSeed()
+  const q = query.trim().toLowerCase()
+  if (!q) return listConversations()
+
+  const conversations = readLocal<Conversation[]>(STORAGE_KEYS.conversations, [])
+  const messages = readLocal<Message[]>(STORAGE_KEYS.messages, [])
+  const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, [])
+
+  return conversations
+    .filter((c) => {
+      if (c.title.toLowerCase().includes(q)) return true
+      const msgs = messages.filter((m) => m.conversation_id === c.id)
+      if (msgs.some((m) => m.content.toLowerCase().includes(q))) return true
+      const imgs = images.filter((i) => i.conversation_id === c.id)
+      return imgs.some(
+        (i) =>
+          i.original_prompt.toLowerCase().includes(q) ||
+          i.enhanced_prompt.toLowerCase().includes(q),
+      )
+    })
+    .sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    )
 }
 
 export async function updateSettings(

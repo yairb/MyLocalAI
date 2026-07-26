@@ -1,4 +1,4 @@
-import { Sparkles } from 'lucide-react'
+import { ImageIcon, Sparkles, Wand2 } from 'lucide-react'
 import { useChatStore } from '@/stores/chatStore'
 import { useCharacterStore } from '@/stores/characterStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -11,8 +11,17 @@ const SUGGESTIONS = [
   'Plan a productive morning routine',
 ]
 
+const IMAGE_SUGGESTIONS = [
+  'A futuristic Tokyo skyline at night',
+  'A majestic red dragon over snowy mountains',
+  'Oil painting of Paris in golden hour',
+  'A realistic lion in the savanna',
+]
+
 export function EmptyState() {
   const sendMessage = useChatStore((s) => s.sendMessage)
+  const setImageMode = useChatStore((s) => s.setImageMode)
+  const generateImage = useChatStore((s) => s.generateImage)
   const characters = useCharacterStore((s) => s.characters)
   const activeCharacterId = useSettingsStore((s) => s.settings?.active_character_id)
   const character =
@@ -27,7 +36,7 @@ export function EmptyState() {
       <p className="mb-1 max-w-md text-center text-[15px] text-muted">
         Private AI assistant running on your Mac.
       </p>
-      <p className="mb-10 text-sm text-muted-dim">
+      <p className="mb-8 text-sm text-muted-dim">
         {character
           ? `Chatting as ${character.name}`
           : 'Start a conversation.'}
@@ -43,6 +52,30 @@ export function EmptyState() {
             {text}
           </button>
         ))}
+      </div>
+
+      <div className="mt-8 w-full max-w-xl">
+        <div className="mb-2.5 flex items-center gap-2 px-1">
+          <ImageIcon className="h-3.5 w-3.5 text-accent" />
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-dim">
+            Generate an image
+          </p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {IMAGE_SUGGESTIONS.map((text) => (
+            <button
+              key={text}
+              onClick={() => {
+                setImageMode(true)
+                void generateImage(text)
+              }}
+              className="flex items-start gap-2 rounded-xl border border-accent/20 bg-accent-soft/40 px-4 py-3 text-left text-sm text-muted transition-all hover:border-accent/40 hover:bg-accent-soft hover:text-white"
+            >
+              <Wand2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+              {text}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="mt-8">

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect, useState } from 'react'
 import {
   Plus,
   Search,
@@ -12,6 +12,8 @@ import { ConversationItem } from './ConversationItem'
 import { cn } from '@/utils/cn'
 import { useCharacterStore } from '@/stores/characterStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { searchConversations } from '@/services/database'
+import type { Conversation } from '@/types'
 
 interface SidebarProps {
   open: boolean
@@ -45,16 +47,38 @@ export function Sidebar({
   const character =
     characters.find((c) => c.id === activeCharacterId) ?? characters[0] ?? null
   const searchRef = useRef<HTMLInputElement>(null)
+  const [searchResults, setSearchResults] = useState<Conversation[] | null>(null)
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus()
   }, [searchOpen])
 
+  // Search titles + message content + image prompts
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!q) {
+      setSearchResults(null)
+      return
+    }
+    let cancelled = false
+    const handle = window.setTimeout(() => {
+      void searchConversations(q).then((results) => {
+        if (!cancelled) setSearchResults(results)
+      })
+    }, 180)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+  }, [searchQuery])
+
   const filtered = useMemo(() => {
+    if (!searchQuery.trim()) return conversations
+    if (searchResults) return searchResults
+    // Instant fallback while async search runs
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return conversations
     return conversations.filter((c) => c.title.toLowerCase().includes(q))
-  }, [conversations, searchQuery])
+  }, [conversations, searchQuery, searchResults])
 
   const groups = useMemo(() => groupConversationsByDate(filtered), [filtered])
 

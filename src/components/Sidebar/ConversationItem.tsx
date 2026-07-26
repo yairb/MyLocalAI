@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import type { Conversation } from '@/types'
 import { formatRelativeTime } from '@/utils/dates'
@@ -18,8 +19,10 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(conversation.title)
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setTitle(conversation.title)
@@ -31,11 +34,35 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
 
   useEffect(() => {
     if (!menuOpen) return
-    const onClick = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false)
+
+    const updateMenuPos = () => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      setMenuPos({
+        top: rect.bottom + 6,
+        right: window.innerWidth - rect.right,
+      })
     }
+
+    updateMenuPos()
+
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      const clickedMenu = menuRef.current?.contains(target)
+      const clickedTrigger = triggerRef.current?.contains(target)
+      if (!clickedMenu && !clickedTrigger) setMenuOpen(false)
+    }
+    const onResize = () => updateMenuPos()
+    const onScroll = () => updateMenuPos()
+
     window.addEventListener('mousedown', onClick)
-    return () => window.removeEventListener('mousedown', onClick)
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('mousedown', onClick)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', onScroll, true)
+    }
   }, [menuOpen])
 
   const commitRename = async () => {
@@ -50,6 +77,7 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
     <div
       className={cn(
         'group relative flex items-center rounded-xl transition-colors',
+        menuOpen && 'z-30',
         active ? 'bg-card' : 'hover:bg-card/60',
       )}
     >
@@ -88,8 +116,9 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
       )}
 
       {!renaming && (
-        <div className="absolute right-1.5 top-1/2 -translate-y-1/2" ref={menuRef}>
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
           <button
+            ref={triggerRef}
             onClick={(e) => {
               e.stopPropagation()
               setMenuOpen((v) => !v)
@@ -103,30 +132,36 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
           >
             <MoreHorizontal className="h-4 w-4" />
           </button>
-
-          {menuOpen && (
-            <div className="absolute right-0 top-8 z-20 w-36 overflow-hidden rounded-xl border border-border bg-sidebar py-1 shadow-xl shadow-black/40 animate-fade-in">
-              <button
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-card"
-                onClick={() => {
-                  setMenuOpen(false)
-                  setRenaming(true)
-                }}
-              >
-                <Pencil className="h-3.5 w-3.5" /> Rename
-              </button>
-              <button
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-danger-soft"
-                onClick={() => {
-                  setMenuOpen(false)
-                  void deleteConversation(conversation.id)
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </button>
-            </div>
-          )}
         </div>
+      )}
+
+      {menuOpen && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[90] w-36 overflow-hidden rounded-xl border border-border bg-sidebar py-1 shadow-xl shadow-black/40 animate-fade-in"
+          style={{ top: menuPos.top, right: menuPos.right }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-200 hover:bg-card"
+            onClick={() => {
+              setMenuOpen(false)
+              setRenaming(true)
+            }}
+          >
+            <Pencil className="h-3.5 w-3.5" /> Rename
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-danger-soft"
+            onClick={() => {
+              setMenuOpen(false)
+              void deleteConversation(conversation.id)
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </button>
+        </div>,
+        document.body,
       )}
     </div>
   )

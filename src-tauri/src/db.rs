@@ -82,6 +82,29 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS generated_images (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                original_prompt TEXT NOT NULL,
+                enhanced_prompt TEXT NOT NULL,
+                image_path TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                seed INTEGER NOT NULL,
+                sampler TEXT NOT NULL,
+                steps INTEGER NOT NULL,
+                cfg REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                generation_time_ms INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_generated_images_conversation
+                ON generated_images(conversation_id);
+
+            CREATE INDEX IF NOT EXISTS idx_generated_images_message
+                ON generated_images(message_id);
             "#,
         )
         .map_err(|e| e.to_string())
@@ -234,10 +257,29 @@ impl Database {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM conversations WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        // Collect image paths before cascade delete so files can be removed from disk
+        let paths = self.list_image_paths_for_conversation(id)?;
+        {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            conn.execute("DELETE FROM conversations WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
+        }
+        for path in paths {
+            let _ = std::fs::remove_file(&path);
+        }
         Ok(())
+    }
+
+    fn list_image_paths_for_conversation(&self, conversation_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT image_path FROM generated_images WHERE conversation_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![conversation_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn touch_conversation(&self, id: &str) -> Result<(), String> {
@@ -268,11 +310,59 @@ impl Database {
                     role: row.get(2)?,
                     content: row.get(3)?,
                     created_at: row.get(4)?,
+                    image: None,
                 })
             })
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
+        let mut messages = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        // Attach generated image metadata for image-role messages
+        let mut img_stmt = conn
+            .prepare(
+                "SELECT id, conversation_id, message_id, original_prompt, enhanced_prompt,
+                        image_path, width, height, seed, sampler, steps, cfg, created_at,
+                        generation_time_ms
+                 FROM generated_images WHERE conversation_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let img_rows = img_stmt
+            .query_map(params![conversation_id], |row| {
+                Ok(GeneratedImage {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    message_id: row.get(2)?,
+                    original_prompt: row.get(3)?,
+                    enhanced_prompt: row.get(4)?,
+                    image_path: row.get(5)?,
+                    width: row.get(6)?,
+                    height: row.get(7)?,
+                    seed: row.get(8)?,
+                    sampler: row.get(9)?,
+                    steps: row.get(10)?,
+                    cfg: row.get(11)?,
+                    created_at: row.get(12)?,
+                    generation_time_ms: row.get(13)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let images: Vec<GeneratedImage> = img_rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        for msg in &mut messages {
+            if msg.role == "image" {
+                msg.image = images
+                    .iter()
+                    .find(|img| img.message_id == msg.id)
+                    .cloned();
+            }
+        }
+
+        Ok(messages)
     }
 
     pub fn add_message(
@@ -303,7 +393,141 @@ impl Database {
             role: role.into(),
             content: content.into(),
             created_at: ts,
+            image: None,
         })
+    }
+
+    pub fn delete_message(&self, id: &str) -> Result<Option<String>, String> {
+        // Return image path if this was an image message so caller can delete the file
+        let image_path: Option<String> = {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            conn.query_row(
+                "SELECT image_path FROM generated_images WHERE message_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        };
+
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(image_path)
+    }
+
+    // ── Generated Images ───────────────────────────────────────
+
+    pub fn create_generated_image(
+        &self,
+        input: CreateGeneratedImageInput,
+    ) -> Result<GeneratedImage, String> {
+        let id = new_id();
+        let ts = now();
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO generated_images (
+                id, conversation_id, message_id, original_prompt, enhanced_prompt,
+                image_path, width, height, seed, sampler, steps, cfg, created_at,
+                generation_time_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                id,
+                input.conversation_id,
+                input.message_id,
+                input.original_prompt,
+                input.enhanced_prompt,
+                input.image_path,
+                input.width,
+                input.height,
+                input.seed,
+                input.sampler,
+                input.steps,
+                input.cfg,
+                ts,
+                input.generation_time_ms
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(GeneratedImage {
+            id,
+            conversation_id: input.conversation_id,
+            message_id: input.message_id,
+            original_prompt: input.original_prompt,
+            enhanced_prompt: input.enhanced_prompt,
+            image_path: input.image_path,
+            width: input.width,
+            height: input.height,
+            seed: input.seed,
+            sampler: input.sampler,
+            steps: input.steps,
+            cfg: input.cfg,
+            created_at: ts,
+            generation_time_ms: input.generation_time_ms,
+        })
+    }
+
+    pub fn get_generated_image(&self, id: &str) -> Result<Option<GeneratedImage>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT id, conversation_id, message_id, original_prompt, enhanced_prompt,
+                    image_path, width, height, seed, sampler, steps, cfg, created_at,
+                    generation_time_ms
+             FROM generated_images WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(GeneratedImage {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    message_id: row.get(2)?,
+                    original_prompt: row.get(3)?,
+                    enhanced_prompt: row.get(4)?,
+                    image_path: row.get(5)?,
+                    width: row.get(6)?,
+                    height: row.get(7)?,
+                    seed: row.get(8)?,
+                    sampler: row.get(9)?,
+                    steps: row.get(10)?,
+                    cfg: row.get(11)?,
+                    created_at: row.get(12)?,
+                    generation_time_ms: row.get(13)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn search_conversations(&self, query: &str) -> Result<Vec<Conversation>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT c.id, c.title, c.character_id, c.created_at, c.updated_at
+                 FROM conversations c
+                 LEFT JOIN messages m ON m.conversation_id = c.id
+                 LEFT JOIN generated_images g ON g.conversation_id = c.id
+                 WHERE c.title LIKE ?1
+                    OR m.content LIKE ?1
+                    OR g.original_prompt LIKE ?1
+                    OR g.enhanced_prompt LIKE ?1
+                 ORDER BY c.updated_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![pattern], |row| {
+                Ok(Conversation {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    character_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn update_message_content(&self, id: &str, content: &str) -> Result<(), String> {

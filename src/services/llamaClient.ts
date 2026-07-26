@@ -128,3 +128,100 @@ export async function checkLlamaHealth(
 export function buildBaseUrl(host: string, port: number): string {
   return `http://${host}:${port}`
 }
+
+export interface CompleteOptions {
+  baseUrl?: string
+  model?: string
+  messages: ChatCompletionMessage[]
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  signal?: AbortSignal
+}
+
+/**
+ * Non-streaming chat completion (used for prompt enhancement, titles, etc.).
+ */
+export async function completeChat(
+  options: CompleteOptions,
+): Promise<string> {
+  const {
+    baseUrl = DEFAULT_BASE,
+    model = 'local-model',
+    messages,
+    temperature = 0.7,
+    top_p = 0.9,
+    max_tokens = 512,
+    signal,
+  } = options
+
+  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      top_p,
+      max_tokens,
+      stream: false,
+    }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(
+      `llama.cpp error ${response.status}: ${text || response.statusText}`,
+    )
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>
+  }
+  return data.choices?.[0]?.message?.content?.trim() ?? ''
+}
+
+const PROMPT_ENGINEER_SYSTEM = `You are an expert Stable Diffusion prompt engineer.
+Convert the user's request into an extremely detailed Stable Diffusion prompt.
+Do not answer conversationally.
+Return ONLY the improved prompt.
+Include:
+lighting
+camera
+style
+materials
+composition
+colors
+high quality keywords
+Do not explain anything.`
+
+/**
+ * Enhance a short user image request into a detailed SD prompt via the local LLM.
+ */
+export async function enhanceImagePrompt(
+  userPrompt: string,
+  options: {
+    baseUrl?: string
+    signal?: AbortSignal
+  } = {},
+): Promise<string> {
+  const raw = await completeChat({
+    baseUrl: options.baseUrl,
+    temperature: 0.75,
+    top_p: 0.9,
+    max_tokens: 300,
+    signal: options.signal,
+    messages: [
+      { role: 'system', content: PROMPT_ENGINEER_SYSTEM },
+      { role: 'user', content: userPrompt },
+    ],
+  })
+
+  // Strip accidental quotes or markdown fences
+  return raw
+    .replace(/^```[\w]*\n?/, '')
+    .replace(/\n?```$/, '')
+    .replace(/^["']|["']$/g, '')
+    .trim() || userPrompt
+}

@@ -110,7 +110,7 @@ export default function App() {
         searchOpen={searchOpen}
         onSearchOpenChange={setSearchOpen}
       />
-      <ChatArea />
+      <ChatArea onOpenSettings={openSettings} />
     </div>
   )
 }

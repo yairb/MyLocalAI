@@ -8,15 +8,26 @@ import {
   Palette,
   Bot,
   SlidersHorizontal,
+  ImageIcon,
 } from 'lucide-react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useEngineStore } from '@/stores/engineStore'
+import {
+  getImageModelCompatibilityWarning,
+  isLikelyCheckpointFilePath,
+} from '@/services/imageGeneration'
 import { Button } from '@/components/UI/Button'
 import { Input, Label, RangeField } from '@/components/UI/Input'
 import { CharacterEditor } from './CharacterEditor'
+import type {
+  ImageBackend,
+  ImageFormat,
+  ImageResolution,
+  ImageSampler,
+} from '@/types'
 import { cn } from '@/utils/cn'
 
-type Tab = 'model' | 'generation' | 'characters' | 'appearance'
+type Tab = 'model' | 'generation' | 'image' | 'characters' | 'appearance'
 
 interface SettingsPageProps {
   onBack: () => void
@@ -25,8 +36,34 @@ interface SettingsPageProps {
 const TABS: { id: Tab; label: string; icon: typeof Cpu }[] = [
   { id: 'model', label: 'Model', icon: HardDrive },
   { id: 'generation', label: 'Generation', icon: SlidersHorizontal },
+  { id: 'image', label: 'Images', icon: ImageIcon },
   { id: 'characters', label: 'Characters', icon: Bot },
   { id: 'appearance', label: 'Appearance', icon: Palette },
+]
+
+const RESOLUTIONS: ImageResolution[] = ['512x512', '768x768', '1024x1024']
+const SAMPLERS: ImageSampler[] = [
+  'euler_a',
+  'euler',
+  'heun',
+  'dpm2',
+  'dpm++2m',
+  'dpm++2s_a',
+  'lms',
+  'ddim',
+]
+const FORMATS: ImageFormat[] = ['png', 'jpeg']
+const IMAGE_BACKENDS: { value: ImageBackend; label: string; hint: string }[] = [
+  {
+    value: 'mlx',
+    label: 'MLX (Apple Silicon)',
+    hint: 'Uses Python + MLX runtime on macOS',
+  },
+  {
+    value: 'sdcpp',
+    label: 'stable-diffusion.cpp',
+    hint: 'Uses sd-cli / sd executable',
+  },
 ]
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
@@ -34,10 +71,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const settings = useSettingsStore((s) => s.settings)
   const modelsDir = useSettingsStore((s) => s.modelsDir)
   const localModels = useSettingsStore((s) => s.localModels)
+  const imageModelsDir = useSettingsStore((s) => s.imageModelsDir)
+  const localImageModels = useSettingsStore((s) => s.localImageModels)
   const update = useSettingsStore((s) => s.update)
   const pickModel = useSettingsStore((s) => s.pickModel)
   const refreshModels = useSettingsStore((s) => s.refreshModels)
+  const pickImageModel = useSettingsStore((s) => s.pickImageModel)
+  const refreshImageModels = useSettingsStore((s) => s.refreshImageModels)
   const engine = useEngineStore()
+  const imageBackend = settings?.image_backend ?? 'mlx'
+  const imageModelWarning = getImageModelCompatibilityWarning(
+    imageBackend,
+    settings?.image_model_path,
+  )
+  const filteredLocalImageModels =
+    imageBackend === 'mlx'
+      ? localImageModels.filter((name) => !isLikelyCheckpointFilePath(name))
+      : localImageModels
+  const hiddenCheckpointCount = localImageModels.length - filteredLocalImageModels.length
 
   if (!settings) {
     return (
@@ -281,6 +332,329 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                         void update({ max_tokens: Number(e.target.value) || 2048 })
                       }
                     />
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {tab === 'image' && (
+              <section className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-semibold">Image Generation</h2>
+                  <p className="mt-1 text-sm text-muted">
+                    The image backend is swappable without changing the chat UI.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-card/40 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-muted-dim">
+                        Image model
+                      </p>
+                      <p className="mt-1 text-sm font-medium">
+                        {settings.image_model_name ??
+                          settings.image_model_path?.split('/').pop() ??
+                          'None selected'}
+                      </p>
+                      {settings.image_model_path && (
+                        <p className="mt-1 break-all text-xs text-muted-dim">
+                          {settings.image_model_path}
+                        </p>
+                      )}
+                    </div>
+                    <span
+                      className={cn(
+                        'rounded-full px-2.5 py-1 text-[11px] font-medium',
+                        settings.image_model_path
+                          ? 'bg-accent-soft text-accent'
+                          : 'bg-card text-muted',
+                      )}
+                    >
+                      {settings.image_model_path ? 'Configured' : 'Missing'}
+                    </span>
+                  </div>
+
+                  {imageModelWarning && (
+                    <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                      {imageModelWarning}
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      variant="accent"
+                      size="sm"
+                      onClick={() => void pickImageModel()}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" /> Browse model
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void refreshImageModels()}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" /> Refresh
+                    </Button>
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Image model location</Label>
+                  <Input
+                    value={imageModelsDir}
+                    readOnly
+                    className="font-mono text-xs"
+                  />
+                  <p className="mt-1.5 text-xs text-muted-dim">
+                    {imageBackend === 'mlx'
+                      ? 'For MLX in this app, set a Hugging Face model id (recommended: stabilityai/sdxl-turbo).'
+                      : 'For stable-diffusion.cpp, place .safetensors files here, e.g. stable-diffusion-v1-5.safetensors.'}
+                  </p>
+                </div>
+
+                <div>
+                  <Label>Image model path or repo id</Label>
+                  <Input
+                    value={settings.image_model_path ?? ''}
+                    placeholder={
+                      imageBackend === 'mlx'
+                        ? 'stabilityai/sdxl-turbo'
+                        : '/absolute/path/to/model.safetensors'
+                    }
+                    onChange={(e) => {
+                      const path = e.target.value.trim()
+                      const name = path ? path.split('/').filter(Boolean).pop() ?? path : null
+                      void update({
+                        image_model_path: path || null,
+                        image_model_name: name,
+                      })
+                    }}
+                    className="font-mono text-xs"
+                  />
+                  <p className="mt-1.5 text-xs text-muted-dim">
+                    {imageBackend === 'mlx'
+                      ? 'Supported now: stabilityai/sdxl-turbo or stabilityai/stable-diffusion-2-1-base. Short aliases: sdxl, sd.'
+                      : 'You can paste any absolute model file path.'}
+                  </p>
+                </div>
+
+                {filteredLocalImageModels.length > 0 && (
+                  <div>
+                    <Label>Available image models</Label>
+                    <div className="mt-1 flex flex-col gap-1.5">
+                      {filteredLocalImageModels.map((name) => (
+                        <button
+                          key={name}
+                          onClick={() =>
+                            void update({
+                              image_model_name: name,
+                              image_model_path: `${imageModelsDir}/${name}`,
+                            })
+                          }
+                          className={cn(
+                            'rounded-xl border px-3 py-2.5 text-left text-sm transition',
+                            settings.image_model_name === name
+                              ? 'border-accent/40 bg-accent-soft'
+                              : 'border-border bg-card/40 hover:bg-card',
+                          )}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {imageBackend === 'mlx' && hiddenCheckpointCount > 0 && (
+                  <p className="text-xs text-muted-dim">
+                    Hidden {hiddenCheckpointCount} checkpoint file
+                    {hiddenCheckpointCount > 1 ? 's' : ''} because MLX requires a model directory.
+                  </p>
+                )}
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <div>
+                    <Label>Image backend</Label>
+                    <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+                      {IMAGE_BACKENDS.map((backend) => {
+                        const selected =
+                          (settings.image_backend ?? 'mlx') === backend.value
+                        return (
+                          <button
+                            key={backend.value}
+                            onClick={() =>
+                              void update({ image_backend: backend.value })
+                            }
+                            className={cn(
+                              'rounded-xl border px-3 py-2.5 text-left text-sm transition',
+                              selected
+                                ? 'border-accent/40 bg-accent-soft text-white'
+                                : 'border-border bg-card/40 text-muted hover:bg-card',
+                            )}
+                          >
+                            <p className="font-medium">{backend.label}</p>
+                            <p className="mt-0.5 text-xs text-muted-dim">
+                              {backend.hint}
+                            </p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label>Default resolution</Label>
+                    <div className="mt-1.5 grid grid-cols-3 gap-2">
+                      {RESOLUTIONS.map((res) => (
+                        <button
+                          key={res}
+                          onClick={() => void update({ image_resolution: res })}
+                          className={cn(
+                            'rounded-xl border px-3 py-2.5 text-sm transition',
+                            settings.image_resolution === res
+                              ? 'border-accent/40 bg-accent-soft text-white'
+                              : 'border-border bg-card/40 text-muted hover:bg-card',
+                          )}
+                        >
+                          {res}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <RangeField
+                    label="Inference steps"
+                    value={settings.image_steps}
+                    min={5}
+                    max={50}
+                    step={1}
+                    onChange={(image_steps) => void update({ image_steps })}
+                  />
+
+                  <RangeField
+                    label="CFG scale"
+                    value={settings.image_cfg_scale}
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    onChange={(image_cfg_scale) =>
+                      void update({ image_cfg_scale })
+                    }
+                    display={settings.image_cfg_scale.toFixed(1)}
+                  />
+
+                  <div>
+                    <Label>Sampler</Label>
+                    <select
+                      value={settings.image_sampler}
+                      onChange={(e) =>
+                        void update({
+                          image_sampler: e.target.value as ImageSampler,
+                        })
+                      }
+                      className="w-full rounded-xl border border-border bg-card px-3.5 py-2.5 text-sm text-white outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
+                    >
+                      {SAMPLERS.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <Label>Seed</Label>
+                      <Input
+                        type="number"
+                        value={settings.image_seed}
+                        disabled={settings.image_random_seed}
+                        onChange={(e) =>
+                          void update({
+                            image_seed: Number(e.target.value) || -1,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="flex items-end pb-1">
+                      <label className="flex cursor-pointer items-center gap-2.5 text-sm text-muted">
+                        <input
+                          type="checkbox"
+                          checked={settings.image_random_seed}
+                          onChange={(e) =>
+                            void update({ image_random_seed: e.target.checked })
+                          }
+                          className="h-4 w-4 rounded border-border accent-accent"
+                        />
+                        Random seed
+                      </label>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label>Default image format</Label>
+                    <div className="mt-1.5 grid grid-cols-2 gap-2">
+                      {FORMATS.map((fmt) => (
+                        <button
+                          key={fmt}
+                          onClick={() => void update({ image_format: fmt })}
+                          className={cn(
+                            'rounded-xl border px-3 py-2.5 text-sm uppercase transition',
+                            settings.image_format === fmt
+                              ? 'border-accent/40 bg-accent-soft text-white'
+                              : 'border-border bg-card/40 text-muted hover:bg-card',
+                          )}
+                        >
+                          {fmt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-muted">
+                    <input
+                      type="checkbox"
+                      checked={settings.image_enhance_prompt}
+                      onChange={(e) =>
+                        void update({ image_enhance_prompt: e.target.checked })
+                      }
+                      className="h-4 w-4 rounded border-border accent-accent"
+                    />
+                    Enhance prompt with LLM by default
+                  </label>
+
+                  <div>
+                    <Label>Negative prompt</Label>
+                    <Input
+                      value={settings.image_negative_prompt}
+                      onChange={(e) =>
+                        void update({ image_negative_prompt: e.target.value })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <Label>Backend executable or config path (optional)</Label>
+                    <Input
+                      value={settings.image_binary_path ?? ''}
+                      placeholder={
+                        imageBackend === 'mlx'
+                          ? '/path/to/python3 or /path/to/mlx-examples/stable_diffusion'
+                          : '/path/to/sd-cli'
+                      }
+                      onChange={(e) =>
+                        void update({
+                          image_binary_path: e.target.value || null,
+                        })
+                      }
+                      className="font-mono text-xs"
+                    />
+                    <p className="mt-1.5 text-xs text-muted-dim">
+                      {imageBackend === 'mlx'
+                        ? 'Leave empty to auto-detect python3 and ~/git/mlx-examples/stable_diffusion'
+                        : 'Leave empty to auto-detect sd on PATH'}
+                    </p>
                   </div>
                 </div>
               </section>
