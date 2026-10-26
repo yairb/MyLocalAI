@@ -795,10 +795,15 @@ def main():
 
     try:
         import mlx.core as mx
+        from huggingface_hub import list_repo_files
         try:
             from stable_diffusion import StableDiffusionXL
         except Exception:
             from stable_diffusion.stable_diffusion import StableDiffusionXL
+        try:
+            from stable_diffusion import model_io as sd_model_io
+        except Exception:
+            from stable_diffusion.stable_diffusion import model_io as sd_model_io
     except Exception as e:
         print(
             "MLX_ERROR: Missing MLX dependencies. Install mlx + mlx-examples and ensure "
@@ -808,8 +813,102 @@ def main():
         print(f"MLX_ERROR_DETAIL: {e}", file=sys.stderr)
         return 2
 
+    def choose(repo_files, candidates, key_name):
+        for c in candidates:
+            if c in repo_files:
+                return c
+        raise ValueError(
+            f"Missing required file for {key_name}. Tried: {', '.join(candidates)}"
+        )
+
+    # mlx-examples stable_diffusion hardcodes known model ids. For custom SDXL repos
+    # like RunDiffusion/Juggernaut-XL-v9, register a mapping dynamically.
+    if args.model not in sd_model_io._MODELS:
+        try:
+            repo_files = set(list_repo_files(args.model))
+        except Exception as e:
+            print(
+                f"MLX_ERROR: Could not list Hugging Face files for '{args.model}'.",
+                file=sys.stderr,
+            )
+            print(f"MLX_ERROR_DETAIL: {e}", file=sys.stderr)
+            return 4
+
+        try:
+            sd_model_io._MODELS[args.model] = {
+                "unet_config": choose(repo_files, [
+                    "unet/config.json",
+                ], "unet_config"),
+                "unet": choose(repo_files, [
+                    "unet/diffusion_pytorch_model.safetensors",
+                    "unet/diffusion_pytorch_model.fp16.safetensors",
+                    "unet/model.safetensors",
+                ], "unet"),
+                "text_encoder_config": choose(repo_files, [
+                    "text_encoder/config.json",
+                ], "text_encoder_config"),
+                "text_encoder": choose(repo_files, [
+                    "text_encoder/model.safetensors",
+                    "text_encoder/model.fp16.safetensors",
+                ], "text_encoder"),
+                "text_encoder_2_config": choose(repo_files, [
+                    "text_encoder_2/config.json",
+                ], "text_encoder_2_config"),
+                "text_encoder_2": choose(repo_files, [
+                    "text_encoder_2/model.safetensors",
+                    "text_encoder_2/model.fp16.safetensors",
+                ], "text_encoder_2"),
+                "vae_config": choose(repo_files, [
+                    "vae/config.json",
+                ], "vae_config"),
+                "vae": choose(repo_files, [
+                    "vae/diffusion_pytorch_model.safetensors",
+                    "vae/diffusion_pytorch_model.fp16.safetensors",
+                    "vae/model.safetensors",
+                ], "vae"),
+                "diffusion_config": choose(repo_files, [
+                    "scheduler/scheduler_config.json",
+                    "scheduler/config.json",
+                ], "diffusion_config"),
+                "tokenizer_vocab": choose(repo_files, [
+                    "tokenizer/vocab.json",
+                ], "tokenizer_vocab"),
+                "tokenizer_merges": choose(repo_files, [
+                    "tokenizer/merges.txt",
+                ], "tokenizer_merges"),
+                "tokenizer_2_vocab": choose(repo_files, [
+                    "tokenizer_2/vocab.json",
+                ], "tokenizer_2_vocab"),
+                "tokenizer_2_merges": choose(repo_files, [
+                    "tokenizer_2/merges.txt",
+                ], "tokenizer_2_merges"),
+            }
+        except Exception as e:
+            print(
+                "MLX_ERROR: Repo does not look like a supported SDXL Diffusers layout.",
+                file=sys.stderr,
+            )
+            print(f"MLX_ERROR_DETAIL: {e}", file=sys.stderr)
+            return 5
+
     progress(5, "Loading MLX model")
     sd = StableDiffusionXL(args.model, float16=True)
+
+    # SDXL CLIP position embeddings in this runtime expect max context length 77.
+    # Enhanced prompts can exceed this and cause broadcast shape failures.
+    def _tokenize_clamped(self, tokenizer, text: str, negative_text: str = None):
+        tokens = [tokenizer.tokenize(text)]
+        if negative_text is not None:
+            tokens += [tokenizer.tokenize(negative_text)]
+
+        max_ctx = 77
+        clipped = [t[:max_ctx] for t in tokens]
+        lengths = [len(t) for t in clipped]
+        N = max(lengths) if lengths else 0
+        clipped = [t + [0] * (N - len(t)) for t in clipped]
+        return mx.array(clipped)
+
+    sd._tokenize = _tokenize_clamped.__get__(sd, type(sd))
 
     latent_w = max(8, args.width // 8)
     latent_h = max(8, args.height // 8)

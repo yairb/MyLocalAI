@@ -267,7 +267,7 @@ export function getImageModelCompatibilityWarning(
   if (!modelPath) return null
   if (backend === 'mlx') {
     if (isLikelyCheckpointFilePath(modelPath)) {
-      return 'Current MLX backend does not accept single checkpoint files. Use a Hugging Face model id: stabilityai/sdxl-turbo or stabilityai/stable-diffusion-2-1-base.'
+      return 'MLX does not accept single checkpoint files directly. Use a Hugging Face SDXL repo id, e.g. RunDiffusion/Juggernaut-XL-v9 or stabilityai/sdxl-turbo.'
     }
 
     const isLikelyLocalPath =
@@ -278,7 +278,7 @@ export function getImageModelCompatibilityWarning(
       /^[a-zA-Z]:[\\/]/.test(modelPath)
 
     if (isLikelyLocalPath) {
-      return 'Current MLX backend expects a Hugging Face model id, not a local path. Try: stabilityai/sdxl-turbo (or alias sdxl).'
+      return 'MLX expects a Hugging Face repo id here (owner/model), not a local path.'
     }
   }
   return null

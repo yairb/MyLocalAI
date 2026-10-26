@@ -408,7 +408,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   />
                   <p className="mt-1.5 text-xs text-muted-dim">
                     {imageBackend === 'mlx'
-                      ? 'For MLX in this app, set a Hugging Face model id (recommended: stabilityai/sdxl-turbo).'
+                      ? 'For MLX, set a Hugging Face SDXL repo id, e.g. RunDiffusion/Juggernaut-XL-v9.'
                       : 'For stable-diffusion.cpp, place .safetensors files here, e.g. stable-diffusion-v1-5.safetensors.'}
                   </p>
                 </div>
@@ -419,7 +419,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                     value={settings.image_model_path ?? ''}
                     placeholder={
                       imageBackend === 'mlx'
-                        ? 'stabilityai/sdxl-turbo'
+                        ? 'RunDiffusion/Juggernaut-XL-v9'
                         : '/absolute/path/to/model.safetensors'
                     }
                     onChange={(e) => {
@@ -434,7 +434,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                   />
                   <p className="mt-1.5 text-xs text-muted-dim">
                     {imageBackend === 'mlx'
-                      ? 'Supported now: stabilityai/sdxl-turbo or stabilityai/stable-diffusion-2-1-base. Short aliases: sdxl, sd.'
+                      ? 'Supported: built-ins (sdxl, sd) and SDXL-style Hugging Face repos like RunDiffusion/Juggernaut-XL-v9.'
                       : 'You can paste any absolute model file path.'}
                   </p>
                 </div>
