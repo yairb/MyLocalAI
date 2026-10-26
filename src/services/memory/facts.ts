@@ -99,15 +99,22 @@ export interface ExtractFactsOptions {
 }
 
 /**
- * Pulls durable facts out of a window of turns and merges them into the character's
- * long-term store. Returns how many rows were newly written or updated.
+ * Pulls durable facts out of a window of turns and merges them into each listed
+ * character's long-term store.
+ *
+ * Extraction runs once even for a group: these are facts about the *user*, and
+ * everyone in the room heard them. Only the per-character dedup runs N times, which
+ * is database work rather than another generation.
  */
 export async function extractFacts(
-  character: Character,
+  characters: Character[],
   messages: Message[],
   options: ExtractFactsOptions,
 ): Promise<number> {
-  const text = transcript(messages, character, options.userName)
+  const primary = characters[0]
+  if (!primary) return 0
+
+  const text = transcript(messages, primary, options.userName)
   if (text.trim().length < 80) return 0
 
   const raw = await completeChat({
@@ -125,36 +132,41 @@ export async function extractFacts(
   const candidates = parseFacts(raw)
   if (!candidates.length) return 0
 
-  // Anything that is really just the persona restated is not a fact about the user.
+  // Anything that is really just a persona restated is not a fact about the user.
   const personaKeywords = new Set(
     extractKeywords(
-      [
-        character.backstory,
-        character.personality_traits.join(' '),
-        character.appearance_prompt,
-        character.scenario,
-      ].join(' '),
-      60,
+      characters
+        .flatMap((c) => [
+          c.backstory,
+          c.personality_traits.join(' '),
+          c.appearance_prompt,
+          c.scenario,
+        ])
+        .join(' '),
+      120,
     ),
   )
 
-  const existing = await db.listMemories(character.id)
+  const usable = candidates
+    .map((candidate) => ({ candidate, keywords: extractKeywords(candidate.content) }))
+    .filter(
+      ({ keywords }) =>
+        keywords.length === 0 || !keywords.every((k) => personaKeywords.has(k)),
+    )
+
   let written = 0
-
-  for (const candidate of candidates) {
-    const keywords = extractKeywords(candidate.content)
-    if (
-      keywords.length > 0 &&
-      keywords.every((k) => personaKeywords.has(k))
-    ) {
-      continue
+  for (const character of characters) {
+    const existing = await db.listMemories(character.id)
+    let changed = 0
+    for (const { candidate, keywords } of usable) {
+      if (await mergeFact(candidate, keywords, existing, character.id, options)) {
+        changed += 1
+      }
     }
-
-    const merged = await mergeFact(candidate, keywords, existing, character.id, options)
-    if (merged) written += 1
+    if (changed) await enforceCap(character.id)
+    written += changed
   }
 
-  if (written) await enforceCap(character.id)
   return written
 }
 

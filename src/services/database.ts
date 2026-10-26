@@ -27,6 +27,7 @@ const STORAGE_KEYS = {
   images: 'mla_generated_images',
   memories: 'mla_memories',
   summaries: 'mla_summaries',
+  participants: 'mla_participants',
 } as const
 
 /**
@@ -123,6 +124,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   image_style_suffix:
     'amateur phone photo, natural lighting, candid, shallow depth of field, photorealistic',
   avatar_resolution: '512x512',
+  group_replies_per_turn: 1,
 }
 
 function nowIso() {
@@ -234,6 +236,12 @@ export async function deleteConversation(id: string): Promise<void> {
   const messages = readLocal<Message[]>(STORAGE_KEYS.messages, []).filter(
     (m) => m.conversation_id !== id,
   )
+  const participants = readLocal<Record<string, string[]>>(
+    STORAGE_KEYS.participants,
+    {},
+  )
+  delete participants[id]
+  writeLocal(STORAGE_KEYS.participants, participants)
   writeLocal(STORAGE_KEYS.messages, messages)
   const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, []).filter(
     (img) => img.conversation_id !== id,
@@ -278,26 +286,57 @@ export async function addMessage(
   conversationId: string,
   role: Role,
   content: string,
+  characterId?: string | null,
 ): Promise<Message> {
   if (isTauri()) {
     return tauriInvoke<Message>('add_message', {
       conversationId,
       role,
       content,
+      characterId: characterId ?? null,
     })
   }
-  const msg: Message = {
+  const message: Message = {
     id: createId(),
     conversation_id: conversationId,
     role,
     content,
     created_at: nowIso(),
+    character_id: characterId ?? null,
   }
-  const messages = readLocal<Message[]>(STORAGE_KEYS.messages, [])
-  messages.push(msg)
-  writeLocal(STORAGE_KEYS.messages, messages)
+  const items = readLocal<Message[]>(STORAGE_KEYS.messages, [])
+  items.push(message)
+  writeLocal(STORAGE_KEYS.messages, items)
   await touchConversation(conversationId)
-  return msg
+  return message
+}
+
+// ── Group participants ─────────────────────────────────────────
+
+export async function listParticipants(
+  conversationId: string,
+): Promise<string[]> {
+  if (isTauri()) {
+    return tauriInvoke<string[]>('list_participants', { conversationId })
+  }
+  const all = readLocal<Record<string, string[]>>(STORAGE_KEYS.participants, {})
+  return all[conversationId] ?? []
+}
+
+/** Replaces the cast; the first entry becomes the conversation's primary character. */
+export async function setParticipants(
+  conversationId: string,
+  characterIds: string[],
+): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('set_participants', { conversationId, characterIds })
+  }
+  const all = readLocal<Record<string, string[]>>(STORAGE_KEYS.participants, {})
+  all[conversationId] = characterIds
+  writeLocal(STORAGE_KEYS.participants, all)
+  if (characterIds[0]) {
+    await updateConversation(conversationId, { character_id: characterIds[0] })
+  }
 }
 
 export async function updateMessageContent(

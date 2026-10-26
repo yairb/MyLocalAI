@@ -33,6 +33,11 @@ import {
   scheduleMemoryWork,
   selectMemories,
 } from '@/services/memory'
+import {
+  coalesce,
+  pickSpeaker,
+  renderGroupMessage,
+} from '@/services/groupChat'
 import { generateTitle } from '@/utils/title'
 import { createId } from '@/utils/id'
 import { useCharacterStore } from './characterStore'
@@ -96,6 +101,15 @@ function renderForModel(message: Message): ChatCompletionMessage | null {
   }
 }
 
+/**
+ * Drops a leading "Name:" the model sometimes writes in a group, where every other
+ * line in the transcript is labelled and the pattern is contagious.
+ */
+function stripOwnName(text: string, name: string): string {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.replace(new RegExp(`^\\s*${escaped}\\s*:\\s*`, 'i'), '').trim()
+}
+
 function countTurnsSinceLastSelfie(messages: Message[]): number {
   let turns = 0
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -113,10 +127,15 @@ async function ensureGreeting(
   character: Character | null,
 ): Promise<Message[]> {
   const greeting = character?.greeting?.trim()
-  if (!greeting) return []
+  if (!greeting || !character) return []
   const existing = await db.listMessages(conversationId)
   if (existing.length > 0) return existing
-  const message = await db.addMessage(conversationId, 'assistant', greeting)
+  const message = await db.addMessage(
+    conversationId,
+    'assistant',
+    greeting,
+    character.id,
+  )
   return [message]
 }
 
@@ -131,6 +150,11 @@ interface ChatState {
   abortController: AbortController | null
   imageAbortController: AbortController | null
   inputFocusToken: number
+
+  /** Characters in the active conversation, in speaking order. */
+  participantIds: string[]
+  /** Who is composing right now, for the header and the typing bubble. */
+  speakingCharacterId: string | null
 
   /** The whole turn, including the photo tail. */
   turnPhase: TurnPhase
@@ -147,6 +171,7 @@ interface ChatState {
   setSearchQuery: (q: string) => void
   selectConversation: (id: string | null) => Promise<void>
   newChat: (characterId?: string) => Promise<void>
+  setConversationParticipants: (characterIds: string[]) => Promise<void>
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   setConversationCharacter: (conversationId: string, characterId: string) => Promise<void>
@@ -215,6 +240,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     imageAbortController: null,
     inputFocusToken: 0,
 
+    participantIds: [],
+    speakingCharacterId: null,
     turnPhase: 'idle',
     queuedMessage: null,
 
@@ -233,11 +260,28 @@ export const useChatStore = create<ChatState>((set, get) => {
     selectConversation: async (id) => {
       if (get().isGenerating) get().stopGenerating()
       if (!id) {
-        set({ activeConversationId: null, messages: [] })
+        set({ activeConversationId: null, messages: [], participantIds: [] })
         return
       }
-      const messages = await db.listMessages(id)
-      set({ activeConversationId: id, messages, error: null })
+      const [messages, stored] = await Promise.all([
+        db.listMessages(id),
+        db.listParticipants(id),
+      ])
+
+      // Conversations from before group chats have no participant rows. Backfill from
+      // the character they were created with, so the cast menu adds rather than
+      // replaces the first time it is used.
+      let participantIds = stored
+      if (!participantIds.length) {
+        const conversation = get().conversations.find((c) => c.id === id)
+        const solo = useCharacterStore.getState().getForConversation(conversation ?? null)
+        if (solo) {
+          participantIds = [solo.id]
+          await db.setParticipants(id, participantIds)
+        }
+      }
+
+      set({ activeConversationId: id, messages, participantIds, error: null })
     },
 
     newChat: async (characterId) => {
@@ -246,14 +290,26 @@ export const useChatStore = create<ChatState>((set, get) => {
       const character =
         (characterId ? characters.getById(characterId) : null) ?? characters.getActive()
       const conv = await db.createConversation('New Chat', character?.id ?? null)
+      if (character) await db.setParticipants(conv.id, [character.id])
       const messages = await ensureGreeting(conv.id, character)
       const conversations = await db.listConversations()
       set({
         conversations,
         activeConversationId: conv.id,
         messages,
+        participantIds: character ? [character.id] : [],
         error: null,
         inputFocusToken: get().inputFocusToken + 1,
+      })
+    },
+
+    setConversationParticipants: async (characterIds) => {
+      const conversationId = get().activeConversationId
+      if (!conversationId || !characterIds.length) return
+      await db.setParticipants(conversationId, characterIds)
+      set({
+        participantIds: characterIds,
+        conversations: await db.listConversations(),
       })
     },
 
@@ -312,21 +368,22 @@ export const useChatStore = create<ChatState>((set, get) => {
 
       const settings = useSettingsStore.getState().settings
       let conversationId = get().activeConversationId
-      let character = resolveCharacter(conversationId)
       let isFirstMessage = false
 
       if (!conversationId) {
+        const character = resolveCharacter(null)
         const conv = await db.createConversation(
           generateTitle(trimmed),
           character?.id ?? null,
         )
         conversationId = conv.id
         isFirstMessage = true
+        if (character) await db.setParticipants(conversationId, [character.id])
         set({
           activeConversationId: conversationId,
+          participantIds: character ? [character.id] : [],
           conversations: await db.listConversations(),
         })
-        character = resolveCharacter(conversationId)
         const greeted = await ensureGreeting(conversationId, character)
         if (greeted.length) set({ messages: greeted })
       } else {
@@ -341,160 +398,54 @@ export const useChatStore = create<ChatState>((set, get) => {
         })
       }
 
-      const conversations = await db.listConversations()
-      const messages = [...get().messages, userMsg]
       set({
-        messages,
-        conversations,
+        messages: [...get().messages, userMsg],
+        conversations: await db.listConversations(),
         streamingContent: '',
         error: null,
       })
-      setPhase('streaming')
 
-      const abortController = new AbortController()
-      set({ abortController })
-
-      const userName = settings?.user_name?.trim() || 'the user'
-      const photosAvailable = Boolean(
-        character?.can_send_images &&
-          settings?.auto_image_enabled &&
-          settings?.image_model_path,
-      )
-
-      // ── Assemble what the model sees ────────────────────────────
-      const [summaryRow, allMemories] = await Promise.all([
-        db.getConversationSummary(conversationId),
-        character?.memory_enabled && settings?.memory_enabled
-          ? db.listMemories(character.id)
-          : Promise.resolve([]),
-      ])
-
-      const facts = allMemories.length
-        ? selectMemories({
-            memories: allMemories,
-            recentMessages: messages,
-            budgetChars: 1200,
-          })
-        : []
-
-      const persona = buildSystemPrompt({
-        character,
-        userName: settings?.user_name,
-        userPersona: settings?.user_persona,
-        memory: { summary: summaryRow?.summary ?? null, facts },
-        image: {
-          enabled: photosAvailable,
-          directive: photosAvailable
-            ? PHOTO_INSTRUCTIONS(character?.name ?? 'you', userName)
-            : null,
-        },
-      })
-
-      const engine = useEngineStore.getState()
-      const contextWindow = engine.contextWindow ?? settings?.context_size ?? 4096
-      const params = resolveGenerationParams(character, settings ?? null, settings?.user_name)
-
-      const packed = packContext({
-        contextWindow,
-        maxTokens: params.max_tokens,
-        persona,
-        messages,
-        estimator: createEstimator(engine.charsPerToken ?? undefined),
-        renderMessage: renderForModel,
-      })
-
-      // Small models often say "sure, here you go!" without emitting the tag. A
-      // throwaway nudge is far more reliable than hoping the standing rule sticks.
-      const chatMessages = [...packed.chatMessages]
-      if (photosAvailable && looksLikeImageRequest(trimmed)) {
-        chatMessages.splice(chatMessages.length - 1, 0, {
-          role: 'system',
-          content: IMAGE_REQUEST_NUDGE(userName),
-        })
-      }
-
-      const baseUrl = buildBaseUrl(
-        settings?.llama_host ?? '127.0.0.1',
-        settings?.llama_port ?? 8080,
-      )
-
-      const filter = createSentinelFilter()
-      let rawReply = ''
-
-      try {
-        await streamChatCompletion({
-          baseUrl,
-          messages: chatMessages,
-          temperature: params.temperature,
-          top_p: params.top_p,
-          max_tokens: Math.min(params.max_tokens, packed.replyReservation),
-          repeat_penalty: params.repeat_penalty,
-          repeat_last_n: params.repeat_last_n,
-          presence_penalty: params.presence_penalty,
-          frequency_penalty: params.frequency_penalty,
-          min_p: params.min_p,
-          top_k: params.top_k,
-          stop: params.stop,
-          signal: abortController.signal,
-          onToken: (token) => {
-            rawReply += token
-            set({ streamingContent: filter.push(token) })
-          },
-        })
-      } catch (e) {
-        const aborted = abortController.signal.aborted
-        const partial = filter.flush().text
-        if (partial) {
-          await db.addMessage(conversationId, 'assistant', partial)
-          await refreshAfterTurn(conversationId)
-        }
-        set({
-          streamingContent: '',
-          abortController: null,
-          error: aborted
-            ? null
-            : getErrorMessage(e, 'Failed to get a response from the local model'),
-        })
-        setPhase('idle')
-        flushQueued()
+      const participants = resolveParticipants(conversationId)
+      if (!participants.length) {
+        set({ error: 'No character is set up for this chat.' })
         return
       }
 
-      const { text, scenes } = filter.flush()
-      const replyText = text || rawReply.trim() || '…'
+      // In a group, more than one voice may answer the same message. Each reply is a
+      // full generation, so the default is one and the cap is the cast size.
+      const maxReplies =
+        participants.length > 1
+          ? Math.max(1, Math.min(settings?.group_replies_per_turn ?? 1, participants.length))
+          : 1
 
-      // The reply is persisted before anything image-related: if the photo fails, the
-      // user still has a normal turn rather than a lost one.
-      const assistantMsg = await db.addMessage(conversationId, 'assistant', replyText)
-      await refreshAfterTurn(conversationId)
-      set({ streamingContent: '', abortController: null })
+      const spoken: string[] = []
+      for (let turn = 0; turn < maxReplies; turn += 1) {
+        const speaker = pickSpeaker({
+          participants,
+          messages: get().messages,
+          userText: turn === 0 ? trimmed : undefined,
+          exclude: spoken,
+        })
+        if (!speaker) break
 
-      const scene = scenes[0]
-      const allowed = photosAvailable && Boolean(scene)
-
-      if (allowed && scene) {
-        const cooldown = settings?.auto_image_cooldown_turns ?? 2
-        const cap = settings?.auto_image_max_per_conversation ?? 10
-        const sent = await db.countImagesOfKind(conversationId, 'character_selfie')
-        const sinceLast = countTurnsSinceLastSelfie(get().messages)
-
-        if (sent < cap && sinceLast >= cooldown) {
-          await sendSelfie({
-            conversationId,
-            messageId: assistantMsg.id,
-            character: character!,
-            scene,
-          })
-        }
+        const completed = await generateReply({
+          conversationId,
+          speaker,
+          participants,
+          userText: turn === 0 ? trimmed : undefined,
+        })
+        if (!completed) break
+        spoken.push(speaker.id)
       }
 
       setPhase('idle')
+      set({ speakingCharacterId: null })
 
       void scheduleMemoryWork({
         conversationId,
-        character,
+        characters: participants.filter((c) => spoken.includes(c.id)),
         messages: get().messages,
-        userName,
+        userName: settings?.user_name?.trim() || 'the user',
       })
 
       flushQueued()
@@ -635,6 +586,198 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     requestInputFocus: () =>
       set({ inputFocusToken: get().inputFocusToken + 1 }),
+  }
+
+  /** Everyone in this conversation, in speaking order, with a solo fallback. */
+  function resolveParticipants(conversationId: string | null): Character[] {
+    const characters = useCharacterStore.getState()
+    const ids = get().participantIds
+    const resolved = ids
+      .map((id) => characters.getById(id))
+      .filter((c): c is Character => c !== null)
+    if (resolved.length) return resolved
+    const solo = resolveCharacter(conversationId)
+    return solo ? [solo] : []
+  }
+
+  /**
+   * One character's reply: assemble their view of the conversation, stream it, save
+   * it, and send the photo if they reached for one. Returns false when nothing was
+   * produced, which stops any further speakers this turn.
+   */
+  async function generateReply(options: {
+    conversationId: string
+    speaker: Character
+    participants: Character[]
+    userText?: string
+  }): Promise<boolean> {
+    const { conversationId, speaker, participants } = options
+    const settings = useSettingsStore.getState().settings
+    const characters = useCharacterStore.getState()
+    const isGroup = participants.length > 1
+    const others = isGroup ? participants.filter((c) => c.id !== speaker.id) : null
+
+    const userName = settings?.user_name?.trim() || 'the user'
+    const userLabel = settings?.user_name?.trim() || 'User'
+    const photosAvailable = Boolean(
+      speaker.can_send_images &&
+        settings?.auto_image_enabled &&
+        settings?.image_model_path,
+    )
+
+    const [summaryRow, allMemories] = await Promise.all([
+      db.getConversationSummary(conversationId),
+      speaker.memory_enabled && settings?.memory_enabled
+        ? db.listMemories(speaker.id)
+        : Promise.resolve([]),
+    ])
+
+    const messages = get().messages
+    const facts = allMemories.length
+      ? selectMemories({
+          memories: allMemories,
+          recentMessages: messages,
+          budgetChars: 1200,
+        })
+      : []
+
+    const persona = buildSystemPrompt({
+      character: speaker,
+      userName: settings?.user_name,
+      userPersona: settings?.user_persona,
+      memory: { summary: summaryRow?.summary ?? null, facts },
+      image: {
+        enabled: photosAvailable,
+        directive: photosAvailable
+          ? PHOTO_INSTRUCTIONS(speaker.name, userName)
+          : null,
+      },
+      others,
+    })
+
+    const engine = useEngineStore.getState()
+    const contextWindow = engine.contextWindow ?? settings?.context_size ?? 4096
+    const params = resolveGenerationParams(
+      speaker,
+      settings ?? null,
+      settings?.user_name,
+      others,
+    )
+
+    const packed = packContext({
+      contextWindow,
+      maxTokens: params.max_tokens,
+      persona,
+      messages,
+      estimator: createEstimator(engine.charsPerToken ?? undefined),
+      // In a group the transcript is written from this speaker's point of view:
+      // their own turns are the assistant's, everyone else arrives labelled.
+      renderMessage: isGroup
+        ? (message) =>
+            renderGroupMessage(message, {
+              speakerId: speaker.id,
+              userLabel,
+              characterName: (id) => characters.getById(id)?.name ?? null,
+            })
+        : renderForModel,
+    })
+
+    const chatMessages = isGroup
+      ? coalesce(packed.chatMessages)
+      : [...packed.chatMessages]
+
+    if (photosAvailable && options.userText && looksLikeImageRequest(options.userText)) {
+      chatMessages.splice(chatMessages.length - 1, 0, {
+        role: 'system',
+        content: IMAGE_REQUEST_NUDGE(userName),
+      })
+    }
+
+    const baseUrl = buildBaseUrl(
+      settings?.llama_host ?? '127.0.0.1',
+      settings?.llama_port ?? 8080,
+    )
+
+    const abortController = new AbortController()
+    const filter = createSentinelFilter()
+    let rawReply = ''
+
+    set({ abortController, streamingContent: '', speakingCharacterId: speaker.id })
+    setPhase('streaming')
+
+    try {
+      await streamChatCompletion({
+        baseUrl,
+        messages: chatMessages,
+        temperature: params.temperature,
+        top_p: params.top_p,
+        max_tokens: Math.min(params.max_tokens, packed.replyReservation),
+        repeat_penalty: params.repeat_penalty,
+        repeat_last_n: params.repeat_last_n,
+        presence_penalty: params.presence_penalty,
+        frequency_penalty: params.frequency_penalty,
+        min_p: params.min_p,
+        top_k: params.top_k,
+        stop: params.stop,
+        signal: abortController.signal,
+        onToken: (token) => {
+          rawReply += token
+          set({ streamingContent: filter.push(token) })
+        },
+      })
+    } catch (e) {
+      const aborted = abortController.signal.aborted
+      const partial = filter.flush().text
+      if (partial) {
+        await db.addMessage(conversationId, 'assistant', partial, speaker.id)
+        await refreshAfterTurn(conversationId)
+      }
+      set({
+        streamingContent: '',
+        abortController: null,
+        speakingCharacterId: null,
+        error: aborted
+          ? null
+          : getErrorMessage(e, 'Failed to get a response from the local model'),
+      })
+      setPhase('idle')
+      return false
+    }
+
+    const { text, scenes } = filter.flush()
+    // The model occasionally labels its own line despite being told not to.
+    const replyText =
+      stripOwnName(text || rawReply.trim(), speaker.name) || '…'
+
+    // Saved before anything image-related: a failed photo must not cost the reply.
+    const assistantMsg = await db.addMessage(
+      conversationId,
+      'assistant',
+      replyText,
+      speaker.id,
+    )
+    await refreshAfterTurn(conversationId)
+    set({ streamingContent: '', abortController: null })
+
+    const scene = scenes[0]
+    if (photosAvailable && scene) {
+      const cooldown = settings?.auto_image_cooldown_turns ?? 2
+      const cap = settings?.auto_image_max_per_conversation ?? 10
+      const sent = await db.countImagesOfKind(conversationId, 'character_selfie')
+      const sinceLast = countTurnsSinceLastSelfie(get().messages)
+
+      if (sent < cap && sinceLast >= cooldown) {
+        await sendSelfie({
+          conversationId,
+          messageId: assistantMsg.id,
+          character: speaker,
+          scene,
+        })
+      }
+    }
+
+    set({ speakingCharacterId: null })
+    return true
   }
 
   // ── Shared image execution ──────────────────────────────────────

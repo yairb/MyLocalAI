@@ -15,6 +15,8 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   /** Whose face to show beside an assistant reply. */
   character?: Character | null
+  /** Label the reply with its speaker — only worth it when there are several. */
+  showName?: boolean
 }
 
 function CodeBlock({
@@ -69,6 +71,7 @@ export function MessageBubble({
   streaming,
   isStreaming,
   character,
+  showName,
 }: MessageBubbleProps) {
   const role = message?.role ?? 'assistant'
   const content = streaming ?? message?.content ?? ''
@@ -128,6 +131,9 @@ export function MessageBubble({
           <Avatar character={character ?? null} size="md" />
         </div>
         <div className="min-w-0 flex-1 pt-1">
+          {showName && character && (
+            <p className="mb-0.5 text-xs font-medium text-muted">{character.name}</p>
+          )}
           {isStreaming && !content ? (
             <TypingIndicator />
           ) : (

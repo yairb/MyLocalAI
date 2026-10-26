@@ -267,6 +267,19 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_generated_images_message
                 ON generated_images(message_id);
 
+            -- Who is in a group conversation. The conversation's own character_id
+            -- stays as the primary, so solo chats and the sidebar are unaffected.
+            CREATE TABLE IF NOT EXISTS conversation_participants (
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, character_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_participants_conversation
+                ON conversation_participants(conversation_id, position);
+
             -- Rolling background summary, one row per conversation. Kept out of the
             -- conversations table so the many `UPDATE conversations SET ...` paths
             -- can never clobber work written by a background summarization run.
@@ -289,6 +302,9 @@ impl Database {
         for (column, decl) in CHARACTER_COLUMNS {
             ensure_column(&conn, "characters", column, decl)?;
         }
+        // Which character said it. Null for user messages and for replies written
+        // before group chats existed, where the conversation's own character answers.
+        ensure_column(&conn, "messages", "character_id", "TEXT")?;
         ensure_column(&conn, "generated_images", "caption", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(
             &conn,
@@ -508,7 +524,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, conversation_id, role, content, created_at
+                "SELECT id, conversation_id, role, content, created_at, character_id
                  FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -520,6 +536,7 @@ impl Database {
                     role: row.get(2)?,
                     content: row.get(3)?,
                     created_at: row.get(4)?,
+                    character_id: row.get(5)?,
                     image: None,
                 })
             })
@@ -558,15 +575,16 @@ impl Database {
         conversation_id: &str,
         role: &str,
         content: &str,
+        character_id: Option<String>,
     ) -> Result<Message, String> {
         let id = new_id();
         let ts = now();
         {
             let conn = self.conn.lock().map_err(|e| e.to_string())?;
             conn.execute(
-                "INSERT INTO messages (id, conversation_id, role, content, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, conversation_id, role, content, ts],
+                "INSERT INTO messages (id, conversation_id, role, content, created_at, character_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, conversation_id, role, content, ts, character_id],
             )
             .map_err(|e| e.to_string())?;
             conn.execute(
@@ -581,8 +599,63 @@ impl Database {
             role: role.into(),
             content: content.into(),
             created_at: ts,
+            character_id,
             image: None,
         })
+    }
+
+    // ── Group participants ─────────────────────────────────────
+
+    pub fn list_participants(&self, conversation_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT character_id FROM conversation_participants
+                 WHERE conversation_id = ?1 ORDER BY position ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![conversation_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Replaces the cast. The first entry also becomes the conversation's primary
+    /// character, which is what the sidebar and solo-chat paths still read.
+    pub fn set_participants(
+        &self,
+        conversation_id: &str,
+        character_ids: Vec<String>,
+    ) -> Result<(), String> {
+        let ts = now();
+        {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            conn.execute(
+                "DELETE FROM conversation_participants WHERE conversation_id = ?1",
+                params![conversation_id],
+            )
+            .map_err(|e| e.to_string())?;
+
+            for (position, character_id) in character_ids.iter().enumerate() {
+                conn.execute(
+                    "INSERT OR IGNORE INTO conversation_participants
+                     (conversation_id, character_id, position, added_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![conversation_id, character_id, position as i64, ts],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+
+            if let Some(primary) = character_ids.first() {
+                conn.execute(
+                    "UPDATE conversations SET character_id = ?1 WHERE id = ?2",
+                    params![primary, conversation_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     pub fn delete_message(&self, id: &str) -> Result<Option<String>, String> {
@@ -1369,6 +1442,84 @@ mod tests {
     }
 
     #[test]
+    fn participants_drive_the_primary_character_and_survive_reordering() {
+        let path = temp_path("participants");
+        let db = Database::open(path.clone()).unwrap();
+        let characters = db.list_characters().unwrap();
+        let a = characters[0].id.clone();
+        let b = characters[1].id.clone();
+
+        let conv = db.create_conversation("c".into(), Some(a.clone())).unwrap();
+        db.set_participants(&conv.id, vec![a.clone(), b.clone()])
+            .unwrap();
+        assert_eq!(db.list_participants(&conv.id).unwrap(), vec![a.clone(), b.clone()]);
+
+        // Reordering makes a different character primary; the sidebar reads that.
+        db.set_participants(&conv.id, vec![b.clone(), a.clone()])
+            .unwrap();
+        assert_eq!(db.list_participants(&conv.id).unwrap(), vec![b.clone(), a.clone()]);
+        let refreshed = db
+            .list_conversations()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id == conv.id)
+            .unwrap();
+        assert_eq!(refreshed.character_id.as_deref(), Some(b.as_str()));
+
+        // Dropping back to one leaves exactly one.
+        db.set_participants(&conv.id, vec![a.clone()]).unwrap();
+        assert_eq!(db.list_participants(&conv.id).unwrap(), vec![a.clone()]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn messages_remember_which_character_said_them() {
+        let path = temp_path("authorship");
+        let db = Database::open(path.clone()).unwrap();
+        let characters = db.list_characters().unwrap();
+        let a = characters[0].id.clone();
+        let b = characters[1].id.clone();
+        let conv = db.create_conversation("c".into(), Some(a.clone())).unwrap();
+
+        db.add_message(&conv.id, "user", "hi both", None).unwrap();
+        db.add_message(&conv.id, "assistant", "hey", Some(a.clone()))
+            .unwrap();
+        db.add_message(&conv.id, "assistant", "evening", Some(b.clone()))
+            .unwrap();
+
+        let messages = db.list_messages(&conv.id).unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].character_id, None, "user messages have no author");
+        assert_eq!(messages[1].character_id.as_deref(), Some(a.as_str()));
+        assert_eq!(messages[2].character_id.as_deref(), Some(b.as_str()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deleting_a_character_removes_it_from_conversations() {
+        let path = temp_path("cascade");
+        let db = Database::open(path.clone()).unwrap();
+        let characters = db.list_characters().unwrap();
+        let a = characters[0].id.clone();
+        let b = characters[1].id.clone();
+        let conv = db.create_conversation("c".into(), Some(a.clone())).unwrap();
+        db.set_participants(&conv.id, vec![a.clone(), b.clone()])
+            .unwrap();
+
+        db.delete_character(&b).unwrap();
+
+        assert_eq!(
+            db.list_participants(&conv.id).unwrap(),
+            vec![a.clone()],
+            "a deleted character leaves the cast",
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn summary_writes_are_rejected_when_they_lose_a_race() {
         let path = temp_path("summary");
         let db = Database::open(path.clone()).unwrap();
@@ -1415,7 +1566,7 @@ mod tests {
         let db = Database::open(path.clone()).unwrap();
         let conv = db.create_conversation("c".into(), None).unwrap();
         let reply = db
-            .add_message(&conv.id, "assistant", "look at this view")
+            .add_message(&conv.id, "assistant", "look at this view", None)
             .unwrap();
 
         db.create_generated_image(CreateGeneratedImageInput {

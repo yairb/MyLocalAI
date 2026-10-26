@@ -36,6 +36,13 @@ relationship with you, and a face that stays the same in every picture.
   GPU and then reloads it, so Settings → Characters caps how often that can happen.
 - **Per conversation.** Each chat remembers whose it is; switch with the name in the
   header.
+- **Group chats.** Add more characters to a conversation from the same menu. Each one
+  keeps its own persona, voice and memory, sees the others as people rather than as
+  itself, and answers only for itself. Address someone by name and they reply;
+  otherwise whoever has been quiet longest speaks, never twice in a row. Settings →
+  Characters sets how many of them answer a single message.
+- **Written with the model.** Every text field in the Studio has a button that writes
+  it from the rest of the sheet, or sharpens what's already there.
 
 The original prompt-only assistants (Default Assistant, Coding Expert, Creative
 Writer) keep working exactly as before — they simply use their own system prompt.
@@ -191,6 +198,16 @@ token estimator is calibrated once per model load against the server's `/tokeniz
 `src/services/memory/` runs after a reply is on screen, never before: it folds older
 turns into a rolling summary and extracts durable facts, both guarded by an in-flight
 lock and an optimistic version so a slow background run can never clobber a newer one.
+
+`src/services/groupChat.ts` decides who speaks next and rewrites the transcript from
+that character's point of view: their own turns are the assistant's, the user and the
+other characters arrive labelled. Runs of incoming turns are folded into one message,
+since some chat templates assume strict alternation. Speaker choice is a heuristic —
+name mention, then least-recently-spoken — rather than a director call to the model,
+which would cost a whole prompt evaluation before any of the reply.
+
+`src/services/characterWriter.ts` writes or rewrites one field of a character sheet,
+always in the context of the fields already filled in.
 
 `src/services/imageDirector.ts` handles a character deciding to send a photo. The model
 marks it inline as `[IMG: what the photo shows]`; an incremental filter holds back any

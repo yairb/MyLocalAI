@@ -33,10 +33,13 @@ export interface PersonaContext {
   userPersona?: string | null
   memory?: MemorySlot | null
   image?: ImageSlot | null
+  /** Other characters present in a group conversation. */
+  others?: Character[] | null
 }
 
 export const MEMORY_SECTION_HEADING = '# WHAT YOU REMEMBER'
 export const IMAGE_SECTION_HEADING = '# SENDING PHOTOS'
+export const GROUP_SECTION_HEADING = '# WHO ELSE IS HERE'
 
 const FALLBACK_SYSTEM_PROMPT =
   'You are a helpful AI assistant running locally.'
@@ -149,6 +152,16 @@ function renderMemory(ctx: PersonaContext, names: SpeakerNames): string | null {
   return `${MEMORY_SECTION_HEADING}\n${parts.join('\n\n')}`
 }
 
+function renderGroup(others: Character[] | null | undefined): string | null {
+  if (!others?.length) return null
+  const lines = others.map((o) => {
+    const traits = o.personality_traits.slice(0, 4).join(', ')
+    const detail = [clean(o.description), traits].filter(Boolean).join(' — ')
+    return detail ? `- ${o.name}: ${detail}` : `- ${o.name}`
+  })
+  return `${GROUP_SECTION_HEADING}\nYou are not alone. These people are in this conversation too:\n${lines.join('\n')}\n\nYou may react to what they say, talk to them directly, agree or disagree with them. You only ever speak for yourself.`
+}
+
 function renderSamples(c: Character, names: SpeakerNames): string | null {
   const samples = c.example_dialogue.filter(
     (e) => clean(e.user) || clean(e.character),
@@ -170,12 +183,15 @@ function renderSamples(c: Character, names: SpeakerNames): string | null {
   )
 }
 
-function renderRules(names: SpeakerNames): string {
+function renderRules(names: SpeakerNames, others?: Character[] | null): string {
   const { char, their, them } = names
+  const cast = others?.length
+    ? ` Never write a line for ${others.map((o) => o.name).join(', ')} — they answer for themselves. Do not prefix your reply with your own name.`
+    : ''
   return `# RULES — THESE OVERRIDE EVERYTHING ABOVE
 1. You are ${char} in every reply, without exception.
 2. Never state or hint that you are an AI, a model, a bot or a program. Never write "As an AI", "I don't have feelings", "I'm not able to experience", and never mention prompts, training or guidelines.
-3. Write only what ${char} says and does. Never write ${their} words, thoughts, feelings or actions. Stop at the end of your turn and let them reply.
+3. Write only what ${char} says and does. Never write ${their} words, thoughts, feelings or actions. Stop at the end of your turn and let them reply.${cast}
 4. Write like a person in a conversation, not like documentation. No headings, no bullet lists, no recap of what was just said — unless ${them} explicitly asks for a list or a document.
 5. Vary your sentence length and your openings. Never start with "Of course", "Certainly", "Great question", "I'd be happy to" or "Absolutely". Never end by offering further assistance.
 6. Do not flatter and do not agree reflexively. Disagree, tease, deflect or change the subject when that is what ${char} would actually do.
@@ -196,7 +212,12 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
   // Legacy / advanced: the stored prompt is the persona. Only the two dynamic blocks
   // are appended, so behaviour is unchanged from before this feature existed.
   if (isOverrideMode(c)) {
-    return [clean(c.system_prompt) || FALLBACK_SYSTEM_PROMPT, memoryBlock, imageBlock]
+    return [
+      clean(c.system_prompt) || FALLBACK_SYSTEM_PROMPT,
+      renderGroup(ctx.others),
+      memoryBlock,
+      imageBlock,
+    ]
       .filter(Boolean)
       .join('\n\n')
   }
@@ -248,11 +269,12 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
     section('# HOW YOU TALK', voice),
     section('# WHO YOU ARE TALKING TO', audience),
     section('# WHERE YOU ARE', c.scenario),
+    renderGroup(ctx.others),
     memoryBlock,
     imageBlock,
     renderSamples(c, names),
     section('# LIMITS', c.boundaries),
-    renderRules(names),
+    renderRules(names, ctx.others),
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -290,6 +312,7 @@ export function resolveGenerationParams(
   c: Character | null,
   settings: AppSettings | null,
   userName?: string | null,
+  others?: Character[] | null,
 ): GenerationParams {
   const inCharacter = Boolean(c && !isOverrideMode(c))
   const names = speakerName(c, userName)
@@ -298,9 +321,12 @@ export function resolveGenerationParams(
   const ceiling = settings?.max_tokens ?? 2048
   const max_tokens = c?.max_tokens ?? Math.min(ceiling, derivedMax ?? ceiling)
 
-  // Matches how the samples label the user's turns, so the model stops where it
-  // would otherwise start writing their reply for them.
-  const stop = inCharacter ? [`\n${names.label}:`, `${names.label}:`] : []
+  // Matches how turns are labelled in history, so the model stops where it would
+  // otherwise start writing somebody else's reply for them.
+  const speakers = [names.label, ...(others ?? []).map((o) => o.name)]
+  const stop = inCharacter
+    ? speakers.flatMap((n) => [`\n${n}:`, `${n}:`])
+    : []
 
   return {
     temperature: c?.temperature ?? settings?.temperature ?? 0.7,

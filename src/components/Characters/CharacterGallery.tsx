@@ -24,13 +24,19 @@ export function CharacterGallery({
   const newChat = useChatStore((s) => s.newChat)
   const generatingFor = useAvatarStore((s) => s.generatingFor)
 
-  const [editing, setEditing] = useState<Character | null | 'new'>(null)
+  const [editingId, setEditingId] = useState<string | 'new' | null>(null)
+  const editing =
+    editingId === 'new'
+      ? 'new'
+      : editingId
+        ? (characters.find((c) => c.id === editingId) ?? null)
+        : null
 
-  if (editing !== null) {
+  if (editingId !== null) {
     return (
       <CharacterStudio
         character={editing === 'new' ? null : editing}
-        onClose={() => setEditing(null)}
+        onClose={() => setEditingId(null)}
       />
     )
   }
@@ -50,7 +56,7 @@ export function CharacterGallery({
           <h2 className="text-sm font-medium text-white">Characters</h2>
         </div>
         <div className="titlebar-no-drag">
-          <Button variant="accent" size="sm" onClick={() => setEditing('new')}>
+          <Button variant="accent" size="sm" onClick={() => setEditingId('new')}>
             <Plus className="h-3.5 w-3.5" /> New character
           </Button>
         </div>
@@ -105,7 +111,7 @@ export function CharacterGallery({
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setEditing(character)}
+                    onClick={() => setEditingId(character.id)}
                     aria-label={`Edit ${character.name}`}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -141,7 +147,7 @@ export function CharacterGallery({
           })}
 
           <button
-            onClick={() => setEditing('new')}
+            onClick={() => setEditingId('new')}
             className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border text-muted transition hover:border-accent/40 hover:text-accent"
           >
             <Plus className="h-6 w-6" />

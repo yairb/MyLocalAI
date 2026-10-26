@@ -63,8 +63,28 @@ pub fn add_message(
     conversation_id: String,
     role: String,
     content: String,
+    character_id: Option<String>,
 ) -> Result<Message, String> {
-    state.db.add_message(&conversation_id, &role, &content)
+    state
+        .db
+        .add_message(&conversation_id, &role, &content, character_id)
+}
+
+#[tauri::command]
+pub fn list_participants(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<String>, String> {
+    state.db.list_participants(&conversation_id)
+}
+
+#[tauri::command]
+pub fn set_participants(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    character_ids: Vec<String>,
+) -> Result<(), String> {
+    state.db.set_participants(&conversation_id, character_ids)
 }
 
 #[tauri::command]

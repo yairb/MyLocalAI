@@ -36,14 +36,17 @@ function engineIsReady(): boolean {
 
 export interface MemoryWorkInput {
   conversationId: string
-  character: Character | null
+  /** Everyone in the conversation who should remember it. */
+  characters: Character[]
   messages: Message[]
   userName: string
 }
 
 export async function scheduleMemoryWork(input: MemoryWorkInput): Promise<void> {
-  const { conversationId, character } = input
-  if (!character?.memory_enabled) return
+  const { conversationId } = input
+  const characters = input.characters.filter((c) => c.memory_enabled)
+  const character = characters[0]
+  if (!character) return
   if (inFlight.has(conversationId)) return inFlight.get(conversationId)
 
   const settings = await db.getSettings()
@@ -77,7 +80,7 @@ export async function scheduleMemoryWork(input: MemoryWorkInput): Promise<void> 
 
       if (signal.aborted) return
 
-      await extractFacts(character, uncovered, {
+      await extractFacts(characters, uncovered, {
         baseUrl,
         signal,
         userName: settings.user_name || 'the user',

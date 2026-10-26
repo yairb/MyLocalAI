@@ -73,9 +73,14 @@ export default function App() {
       const chat = useChatStore.getState()
       if (chat.activeConversationId !== conversationId) return null
       const conversation = chat.conversations.find((c) => c.id === conversationId)
+      const characters = useCharacters.getState()
+      const participants = chat.participantIds
+        .map((id) => characters.getById(id))
+        .filter((c): c is NonNullable<typeof c> => c !== null)
+      const fallback = characters.getForConversation(conversation ?? null)
       return {
         conversationId,
-        character: useCharacters.getState().getForConversation(conversation ?? null),
+        characters: participants.length ? participants : fallback ? [fallback] : [],
         messages: chat.messages,
         userName:
           useSettingsStore.getState().settings?.user_name?.trim() || 'the user',

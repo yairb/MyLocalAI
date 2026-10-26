@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   BookOpen,
@@ -13,6 +13,11 @@ import {
 } from 'lucide-react'
 import type { Character, CharacterDraft, EmojiUsage, ResponseLength } from '@/types'
 import { CHARACTER_DEFAULTS } from '@/services/database'
+import {
+  isListField,
+  parseExampleExchange,
+  type WritableField,
+} from '@/services/characterWriter'
 import { buildSystemPrompt, hasRichPersona } from '@/services/personaPrompt'
 import { useCharacterStore } from '@/stores/characterStore'
 import { useAvatarStore } from '@/stores/avatarStore'
@@ -21,6 +26,7 @@ import { Avatar } from '@/components/UI/Avatar'
 import { Button } from '@/components/UI/Button'
 import { Input, Label, RangeField, TextArea } from '@/components/UI/Input'
 import { cn } from '@/utils/cn'
+import { AiFieldButton } from './AiFieldButton'
 import { ExampleDialogueEditor } from './ExampleDialogueEditor'
 import { MemoryPanel } from './MemoryPanel'
 import { Segmented } from './Segmented'
@@ -94,6 +100,27 @@ export function CharacterStudio({
   const set = <K extends keyof CharacterDraft>(key: K, value: CharacterDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }))
 
+  // Avatar generation writes straight to the store, so the draft has to pick the new
+  // picture up. Without this the editor keeps showing the old face, and worse, saving
+  // would write the stale avatar_path back over the one just generated.
+  const savedAvatar = character?.avatar_path ?? null
+  const savedSeed = character?.appearance_seed ?? null
+  const savedVariant = character?.avatar_variant ?? 0
+  useEffect(() => {
+    setDraft((d) =>
+      d.avatar_path === savedAvatar &&
+      d.appearance_seed === savedSeed &&
+      d.avatar_variant === savedVariant
+        ? d
+        : {
+            ...d,
+            avatar_path: savedAvatar,
+            appearance_seed: savedSeed,
+            avatar_variant: savedVariant,
+          },
+    )
+  }, [savedAvatar, savedSeed, savedVariant])
+
   // Live preview of exactly what the model will be given. Cheap, because
   // buildSystemPrompt is pure — and the only way this is debuggable at all.
   const preview = useMemo(
@@ -129,6 +156,47 @@ export function CharacterStudio({
   }
 
   const avatarBusy = generatingFor === character?.id
+
+  /** Writes a generated field back, splitting the ones the editor stores as lists. */
+  const applyWritten = (field: WritableField, text: string) => {
+    if (field === 'example_dialogue') {
+      const pair = parseExampleExchange(text)
+      if (pair) set('example_dialogue', [...draft.example_dialogue, pair])
+      return
+    }
+    if (isListField(field) && (field === 'personality_traits' || field === 'interests')) {
+      set(
+        field,
+        text
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean),
+      )
+      return
+    }
+    set(field as 'backstory', text)
+  }
+
+  const fieldHasContent = (field: WritableField): boolean => {
+    if (field === 'personality_traits') return draft.personality_traits.length > 0
+    if (field === 'interests') return draft.interests.length > 0
+    if (field === 'example_dialogue') return false
+    return Boolean((draft[field as keyof CharacterDraft] as string)?.trim())
+  }
+
+  /** A label with the model-assist button sitting on its right. */
+  const fieldLabel = (text: string, field: WritableField, assistLabel?: string) => (
+    <div className="mb-1.5 flex items-center justify-between gap-2">
+      <Label className="mb-0">{text}</Label>
+      <AiFieldButton
+        field={field}
+        draft={draft}
+        hasContent={fieldHasContent(field)}
+        onResult={(written) => applyWritten(field, written)}
+        label={assistLabel ?? text.toLowerCase()}
+      />
+    </div>
+  )
 
   return (
     <div className="flex h-full w-full flex-col bg-app">
@@ -204,7 +272,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Tagline</Label>
+                  {fieldLabel('Tagline', 'description', 'a tagline')}
                   <Input
                     value={draft.description}
                     onChange={(e) => set('description', e.target.value)}
@@ -225,7 +293,7 @@ export function CharacterStudio({
             {section === 'story' && (
               <>
                 <div>
-                  <Label>Backstory</Label>
+                  {fieldLabel('Backstory', 'backstory', 'a backstory')}
                   <TextArea
                     value={draft.backstory}
                     onChange={(e) => set('backstory', e.target.value)}
@@ -234,7 +302,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>The scene</Label>
+                  {fieldLabel('The scene', 'scenario', 'the scene')}
                   <TextArea
                     value={draft.scenario}
                     onChange={(e) => set('scenario', e.target.value)}
@@ -243,7 +311,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Things they always know</Label>
+                  {fieldLabel('Things they always know', 'key_memories', 'some shared history')}
                   <TextArea
                     value={draft.key_memories}
                     onChange={(e) => set('key_memories', e.target.value)}
@@ -257,7 +325,7 @@ export function CharacterStudio({
             {section === 'personality' && (
               <>
                 <div>
-                  <Label>Core traits</Label>
+                  {fieldLabel('Core traits', 'personality_traits', 'their traits')}
                   <TagInput
                     value={draft.personality_traits}
                     onChange={(v) => set('personality_traits', v)}
@@ -265,7 +333,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Good at</Label>
+                  {fieldLabel('Good at', 'strengths', 'their strengths')}
                   <TextArea
                     value={draft.strengths}
                     onChange={(e) => set('strengths', e.target.value)}
@@ -273,7 +341,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Struggles with</Label>
+                  {fieldLabel('Struggles with', 'weaknesses', 'their flaws')}
                   <TextArea
                     value={draft.weaknesses}
                     onChange={(e) => set('weaknesses', e.target.value)}
@@ -282,7 +350,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Habits and quirks</Label>
+                  {fieldLabel('Habits and quirks', 'quirks', 'their quirks')}
                   <TextArea
                     value={draft.quirks}
                     onChange={(e) => set('quirks', e.target.value)}
@@ -290,7 +358,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>What matters to them</Label>
+                  {fieldLabel('What matters to them', 'core_values', 'their values')}
                   <TextArea
                     value={draft.core_values}
                     onChange={(e) => set('core_values', e.target.value)}
@@ -298,7 +366,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Interests</Label>
+                  {fieldLabel('Interests', 'interests', 'their interests')}
                   <TagInput
                     value={draft.interests}
                     onChange={(v) => set('interests', v)}
@@ -311,7 +379,7 @@ export function CharacterStudio({
             {section === 'voice' && (
               <>
                 <div>
-                  <Label>How they speak</Label>
+                  {fieldLabel('How they speak', 'speaking_style', 'their speaking style')}
                   <TextArea
                     value={draft.speaking_style}
                     onChange={(e) => set('speaking_style', e.target.value)}
@@ -336,7 +404,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Voice samples</Label>
+                  {fieldLabel('Voice samples', 'example_dialogue', 'another sample')}
                   <p className="mb-2 text-xs text-muted">
                     The strongest lever on how they sound. These are shown as examples,
                     not as things that happened.
@@ -353,7 +421,7 @@ export function CharacterStudio({
             {section === 'relationship' && (
               <>
                 <div>
-                  <Label>What you are to each other</Label>
+                  {fieldLabel('What you are to each other', 'relationship_to_user', 'the relationship')}
                   <TextArea
                     value={draft.relationship_to_user}
                     onChange={(e) => set('relationship_to_user', e.target.value)}
@@ -370,7 +438,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Opening line</Label>
+                  {fieldLabel('Opening line', 'greeting', 'an opening line')}
                   <TextArea
                     value={draft.greeting}
                     onChange={(e) => set('greeting', e.target.value)}
@@ -379,7 +447,7 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
-                  <Label>Limits</Label>
+                  {fieldLabel('Limits', 'boundaries', 'the limits')}
                   <TextArea
                     value={draft.boundaries}
                     onChange={(e) => set('boundaries', e.target.value)}
@@ -393,7 +461,7 @@ export function CharacterStudio({
             {section === 'appearance' && (
               <>
                 <div>
-                  <Label>How they look</Label>
+                  {fieldLabel('How they look', 'appearance_prompt', 'their appearance')}
                   <TextArea
                     value={draft.appearance_prompt}
                     onChange={(e) => set('appearance_prompt', e.target.value)}

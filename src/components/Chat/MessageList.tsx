@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
 import { useConversationCharacter } from '@/hooks/useConversationCharacter'
+import { useCharacterStore } from '@/stores/characterStore'
 import { MessageBubble } from './MessageBubble'
 import { ImageMessageCard } from './ImageMessageCard'
 import { ImageGeneratingPlaceholder } from './ImageGeneratingPlaceholder'
@@ -20,7 +21,14 @@ export function MessageList({ onOpenSettings }: MessageListProps) {
   const cancelImageGeneration = useChatStore((s) => s.cancelImageGeneration)
   const retryImageGeneration = useChatStore((s) => s.retryImageGeneration)
   const character = useConversationCharacter()
+  const participantIds = useChatStore((s) => s.participantIds)
+  const speakingCharacterId = useChatStore((s) => s.speakingCharacterId)
+  const getById = useCharacterStore((s) => s.getById)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  // With several characters in the room, each reply needs its own face and name.
+  const isGroup = participantIds.length > 1
+  const speaking = speakingCharacterId ? getById(speakingCharacterId) : null
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -56,14 +64,20 @@ export function MessageList({ onOpenSettings }: MessageListProps) {
           msg.role === 'image' ? (
             <ImageMessageCard key={msg.id} message={msg} />
           ) : (
-            <MessageBubble key={msg.id} message={msg} character={character} />
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              character={getById(msg.character_id) ?? character}
+              showName={isGroup}
+            />
           ),
         )}
         {isGenerating && (
           <MessageBubble
             streaming={streamingContent}
             isStreaming
-            character={character}
+            character={speaking ?? character}
+            showName={isGroup}
           />
         )}
         {showImagePlaceholder && imageJob && (

@@ -85,6 +85,8 @@ pub fn run() {
             commands::get_models_dir,
             commands::list_local_models,
             commands::get_character,
+            commands::list_participants,
+            commands::set_participants,
             commands::list_memories,
             commands::create_memory,
             commands::update_memory,

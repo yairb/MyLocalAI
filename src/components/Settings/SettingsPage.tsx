@@ -692,6 +692,28 @@ export function SettingsPage({ onBack, onOpenCharacters }: SettingsPageProps) {
                 </div>
 
                 <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <div>
+                    <p className="text-sm font-medium text-white">Group chats</p>
+                    <p className="mt-1 text-xs text-muted">
+                      Add more characters to a chat from the name at the top of the
+                      conversation. Each reply is a separate generation, so more voices
+                      per message means a slower turn.
+                    </p>
+                  </div>
+                  <RangeField
+                    label="Characters who answer one message"
+                    value={settings.group_replies_per_turn}
+                    min={1}
+                    max={3}
+                    step={1}
+                    onChange={(group_replies_per_turn) =>
+                      void update({ group_replies_per_turn })
+                    }
+                    display={String(settings.group_replies_per_turn)}
+                  />
+                </div>
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
                   <p className="text-sm font-medium text-white">Memory</p>
                   <label className="flex cursor-pointer items-center gap-2.5 text-sm">
                     <input

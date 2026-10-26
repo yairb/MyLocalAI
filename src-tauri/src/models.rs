@@ -16,6 +16,10 @@ pub struct Message {
     pub role: String,
     pub content: String,
     pub created_at: String,
+    /// Which character said it. None for user messages, and for assistant replies
+    /// written before group chats existed.
+    #[serde(default)]
+    pub character_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<GeneratedImage>,
 }
@@ -293,6 +297,10 @@ pub struct AppSettings {
     pub image_style_suffix: String,
     #[serde(default = "default_avatar_resolution")]
     pub avatar_resolution: String,
+
+    // Group conversations
+    #[serde(default = "default_group_replies")]
+    pub group_replies_per_turn: i64,
 }
 
 fn default_temperature() -> f64 {
@@ -318,6 +326,9 @@ fn default_image_style_suffix() -> String {
 }
 fn default_avatar_resolution() -> String {
     "512x512".into()
+}
+fn default_group_replies() -> i64 {
+    1
 }
 fn default_image_resolution() -> String {
     "512x512".into()
@@ -383,6 +394,7 @@ impl Default for AppSettings {
             auto_image_cooldown_turns: default_auto_image_cooldown(),
             image_style_suffix: default_image_style_suffix(),
             avatar_resolution: default_avatar_resolution(),
+            group_replies_per_turn: default_group_replies(),
         }
     }
 }

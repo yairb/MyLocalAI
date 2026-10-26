@@ -110,7 +110,9 @@ export interface Message {
   /** For image messages: original user prompt (searchable). Otherwise message text. */
   content: string
   created_at: string
-  /** Present when role === 'image' */
+  /** Which character said it. null for user messages and for pre-group replies. */
+  character_id?: string | null
+  /** The photo attached to this message, if any. */
   image?: GeneratedImage | null
 }
 
@@ -242,6 +244,9 @@ export interface AppSettings {
   auto_image_cooldown_turns: number
   image_style_suffix: string
   avatar_resolution: ImageResolution
+
+  // Group conversations
+  group_replies_per_turn: number
 }
 
 export type EngineStatus =
