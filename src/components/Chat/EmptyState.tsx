@@ -1,7 +1,8 @@
 import { ImageIcon, Sparkles, Wand2 } from 'lucide-react'
 import { useChatStore } from '@/stores/chatStore'
-import { useCharacterStore } from '@/stores/characterStore'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { useConversationCharacter } from '@/hooks/useConversationCharacter'
+import { hasRichPersona } from '@/services/personaPrompt'
+import { Avatar } from '@/components/UI/Avatar'
 import { Button } from '@/components/UI/Button'
 
 const SUGGESTIONS = [
@@ -22,10 +23,34 @@ export function EmptyState() {
   const sendMessage = useChatStore((s) => s.sendMessage)
   const setImageMode = useChatStore((s) => s.setImageMode)
   const generateImage = useChatStore((s) => s.generateImage)
-  const characters = useCharacterStore((s) => s.characters)
-  const activeCharacterId = useSettingsStore((s) => s.settings?.active_character_id)
-  const character =
-    characters.find((c) => c.id === activeCharacterId) ?? characters[0] ?? null
+  const newChat = useChatStore((s) => s.newChat)
+  const character = useConversationCharacter()
+  const isPersona = character ? hasRichPersona(character) : false
+
+  // A full persona gets an introduction rather than a product splash screen.
+  if (character && isPersona) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center px-6 animate-fade-in">
+        <Avatar character={character} size="xl" ring />
+        <h1 className="mb-1 mt-5 text-2xl font-semibold tracking-tight">
+          {character.name}
+        </h1>
+        {character.description && (
+          <p className="mb-4 max-w-md text-center text-[15px] text-muted">
+            {character.description}
+          </p>
+        )}
+        {character.scenario && (
+          <p className="mb-6 max-w-md text-center text-sm italic text-muted-dim">
+            {character.scenario}
+          </p>
+        )}
+        <Button variant="accent" onClick={() => void newChat(character.id)}>
+          Start talking
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 animate-fade-in">

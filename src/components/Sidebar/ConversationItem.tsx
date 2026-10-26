@@ -5,6 +5,8 @@ import type { Conversation } from '@/types'
 import { formatRelativeTime } from '@/utils/dates'
 import { cn } from '@/utils/cn'
 import { useChatStore } from '@/stores/chatStore'
+import { useCharacterStore } from '@/stores/characterStore'
+import { Avatar } from '@/components/UI/Avatar'
 
 interface ConversationItemProps {
   conversation: Conversation
@@ -15,6 +17,10 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
   const selectConversation = useChatStore((s) => s.selectConversation)
   const renameConversation = useChatStore((s) => s.renameConversation)
   const deleteConversation = useChatStore((s) => s.deleteConversation)
+  // First place the per-conversation character becomes visible at a glance.
+  const character = useCharacterStore((s) =>
+    s.characters.find((c) => c.id === conversation.character_id) ?? null,
+  )
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -99,18 +105,21 @@ export function ConversationItem({ conversation, active }: ConversationItemProps
       ) : (
         <button
           onClick={() => void selectConversation(conversation.id)}
-          className="flex min-w-0 flex-1 flex-col items-start px-3 py-2.5 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left"
         >
-          <span
-            className={cn(
-              'w-full truncate text-sm',
-              active ? 'font-medium text-white' : 'text-neutral-200',
-            )}
-          >
-            {conversation.title}
-          </span>
-          <span className="mt-0.5 text-[11px] text-muted-dim">
-            {formatRelativeTime(conversation.updated_at)}
+          {character && <Avatar character={character} size="xs" />}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span
+              className={cn(
+                'w-full truncate text-sm',
+                active ? 'font-medium text-white' : 'text-neutral-200',
+              )}
+            >
+              {conversation.title}
+            </span>
+            <span className="mt-0.5 text-[11px] text-muted-dim">
+              {formatRelativeTime(conversation.updated_at)}
+            </span>
           </span>
         </button>
       )}

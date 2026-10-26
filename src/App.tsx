@@ -3,13 +3,16 @@ import { Sidebar } from '@/components/Sidebar/Sidebar'
 import { ChatArea } from '@/components/Chat/ChatArea'
 import { LoadingScreen } from '@/components/Chat/LoadingScreen'
 import { SettingsPage } from '@/components/Settings/SettingsPage'
+import { CharacterGallery } from '@/components/Characters/CharacterGallery'
 import { useChatStore } from '@/stores/chatStore'
 import { useCharacterStore } from '@/stores/characterStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useEngineStore } from '@/stores/engineStore'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
+import { drainPendingMemoryWork } from '@/services/memory'
+import { useCharacterStore as useCharacters } from '@/stores/characterStore'
 
-type View = 'boot' | 'chat' | 'settings'
+type View = 'boot' | 'chat' | 'settings' | 'characters'
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
@@ -63,8 +66,26 @@ export default function App() {
     }
   }, [view, engineStatus])
 
+  // Memory work skipped while the engine was stopped for an image runs now.
+  useEffect(() => {
+    if (engineStatus !== 'ready') return
+    drainPendingMemoryWork((conversationId) => {
+      const chat = useChatStore.getState()
+      if (chat.activeConversationId !== conversationId) return null
+      const conversation = chat.conversations.find((c) => c.id === conversationId)
+      return {
+        conversationId,
+        character: useCharacters.getState().getForConversation(conversation ?? null),
+        messages: chat.messages,
+        userName:
+          useSettingsStore.getState().settings?.user_name?.trim() || 'the user',
+      }
+    })
+  }, [engineStatus])
+
   const openSettings = useCallback(() => setView('settings'), [])
   const openChat = useCallback(() => setView('chat'), [])
+  const openCharacters = useCallback(() => setView('characters'), [])
 
   const handleNewChat = useCallback(() => {
     setView('chat')
@@ -96,7 +117,15 @@ export default function App() {
   if (view === 'settings') {
     return (
       <div className="flex h-full">
-        <SettingsPage onBack={openChat} />
+        <SettingsPage onBack={openChat} onOpenCharacters={openCharacters} />
+      </div>
+    )
+  }
+
+  if (view === 'characters') {
+    return (
+      <div className="flex h-full">
+        <CharacterGallery onBack={openChat} onStartChat={openChat} />
       </div>
     )
   }
@@ -107,10 +136,11 @@ export default function App() {
         open={sidebarOpen}
         onToggle={() => setSidebarOpen((v) => !v)}
         onOpenSettings={openSettings}
+        onOpenCharacters={openCharacters}
         searchOpen={searchOpen}
         onSearchOpenChange={setSearchOpen}
       />
-      <ChatArea onOpenSettings={openSettings} />
+      <ChatArea onOpenSettings={openSettings} onOpenCharacters={openCharacters} />
     </div>
   )
 }

@@ -12,11 +12,37 @@ Built with **Tauri 2**, **React**, **TypeScript**, **Vite**, **Tailwind CSS**, *
 - Prompt enhancement via MythoMax before generation
 - Image cards in chat (download, regenerate, delete, fullscreen viewer)
 - Multiple conversations with search (including image prompts), rename, delete
-- AI **Characters** (system prompts + per-character temperature)
+- **Characters** with a full persona, a generated face, memory, and photos (below)
 - Settings for chat model, image model, sampling, resolution, seed
-- SQLite persistence (conversations, messages, characters, generated images)
-- Architecture ready for long-term memory and alternate image backends
+- SQLite persistence (conversations, messages, characters, memories, generated images)
 - Native macOS window (overlay titlebar, keyboard shortcuts)
+
+## Characters
+
+A character is a person, not a system prompt: a backstory, traits, a voice, a
+relationship with you, and a face that stays the same in every picture.
+
+- **Character Studio** — backstory, personality, speaking style, reply length, voice
+  samples, relationship and scene, limits. A live preview shows exactly what the model
+  will be given.
+- **A generated profile picture.** Describe how they look; the picture is made with
+  your local Stable Diffusion model and the seed is locked, so later photos show the
+  same face. Re-roll if you want a different one.
+- **Memory.** A rolling summary keeps the thread of a long conversation, and durable
+  facts about you are remembered across conversations. Both are visible and editable
+  under Memory in the Studio — pin what matters, delete what's wrong.
+- **Photos in chat.** A character can send a photo of itself, either because you asked
+  or because the moment calls for it. Generating one stops the chat model to free the
+  GPU and then reloads it, so Settings → Characters caps how often that can happen.
+- **Per conversation.** Each chat remembers whose it is; switch with the name in the
+  header.
+
+The original prompt-only assistants (Default Assistant, Coding Expert, Creative
+Writer) keep working exactly as before — they simply use their own system prompt.
+
+Long conversations are also now budgeted against the model's real context window,
+which it reads from the running server. Before this, a chat that outgrew the window
+failed outright: `llama-server` ships with context shifting disabled.
 
 ### Shortcuts
 
@@ -149,11 +175,26 @@ SQLite tables: `conversations`, `messages`, `characters`, `settings`, `generated
 
 ### Image generation
 
-Frontend uses `ImageGenerationProvider` (`src/services/imageGeneration.ts`). The Stable Diffusion backend runs in Rust (`src-tauri/src/image_gen.rs`) by spawning `sd` (stable-diffusion.cpp). Progress events stream to the UI; text chat remains available while an image is generating.
+Frontend uses `ImageGenerationProvider` (`src/services/imageGeneration.ts`). The Stable Diffusion backend runs in Rust (`src-tauri/src/image_gen.rs`) by spawning `sd` (stable-diffusion.cpp) or the MLX script. Every image — the chat tool, a character selfie, an avatar — goes through `src/services/imagePipeline.ts`, which composes the prompt while the chat engine is still up, then stops it for the duration of the generation and waits for it to reload afterwards.
 
 ### Characters
 
-Each chat injects the active character’s `system_prompt` as the first message. Character temperature overrides global temperature when set.
+`src/services/personaPrompt.ts` compiles a character into a system prompt. It is pure,
+which is what makes the live preview in the Studio possible. A character with no
+persona fields, or with the override flag set, falls back to its raw `system_prompt`
+unchanged — that is how the original assistants keep working.
+
+`src/services/contextBudget.ts` packs the conversation into the window: persona first,
+then a capped memory block, then as many recent turns as fit, walking backwards. The
+token estimator is calibrated once per model load against the server's `/tokenize`.
+
+`src/services/memory/` runs after a reply is on screen, never before: it folds older
+turns into a rolling summary and extracts durable facts, both guarded by an in-flight
+lock and an optimistic version so a slow background run can never clobber a newer one.
+
+`src/services/imageDirector.ts` handles a character deciding to send a photo. The model
+marks it inline as `[IMG: what the photo shows]`; an incremental filter holds back any
+text that might still turn into that tag, so it never flashes mid-stream.
 
 ## License
 

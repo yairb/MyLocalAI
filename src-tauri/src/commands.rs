@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::image_gen::{
-    copy_image_file, image_models_dir, list_image_models, reveal_in_finder, ImageGenManager,
+    avatars_dir, copy_image_file, image_models_dir, list_image_models, reveal_in_finder,
+    ImageGenManager,
 };
 use crate::llama::{list_gguf_models, models_dir, LlamaManager};
 use crate::models::*;
@@ -98,7 +99,19 @@ pub fn update_character(
 
 #[tauri::command]
 pub fn delete_character(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.db.delete_character(&id)
+    let avatar_path = state.db.delete_character(&id)?;
+    if let Some(path) = avatar_path {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_character(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<Character>, String> {
+    state.db.get_character(&id)
 }
 
 #[tauri::command]
@@ -154,8 +167,103 @@ pub fn list_local_models() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn list_memories(state: State<'_, AppState>) -> Result<Vec<Memory>, String> {
-    state.db.list_memories()
+pub fn list_memories(
+    state: State<'_, AppState>,
+    character_id: Option<String>,
+) -> Result<Vec<Memory>, String> {
+    state.db.list_memories(character_id)
+}
+
+#[tauri::command]
+pub fn create_memory(
+    state: State<'_, AppState>,
+    input: CreateMemoryInput,
+) -> Result<Memory, String> {
+    state.db.create_memory(input)
+}
+
+#[tauri::command]
+pub fn update_memory(state: State<'_, AppState>, input: UpdateMemoryInput) -> Result<(), String> {
+    state.db.update_memory(input)
+}
+
+#[tauri::command]
+pub fn delete_memory(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.db.delete_memory(&id)
+}
+
+#[tauri::command]
+pub fn delete_memories_for_character(
+    state: State<'_, AppState>,
+    character_id: String,
+) -> Result<(), String> {
+    state.db.delete_memories_for_character(&character_id)
+}
+
+#[tauri::command]
+pub fn get_conversation_summary(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<ConversationSummary>, String> {
+    state.db.get_conversation_summary(&conversation_id)
+}
+
+#[tauri::command]
+pub fn upsert_conversation_summary(
+    state: State<'_, AppState>,
+    input: UpsertSummaryInput,
+) -> Result<Option<ConversationSummary>, String> {
+    state.db.upsert_conversation_summary(input)
+}
+
+#[tauri::command]
+pub fn clear_conversation_summary(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    state.db.clear_conversation_summary(&conversation_id)
+}
+
+#[tauri::command]
+pub fn count_images_of_kind(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    kind: String,
+) -> Result<i64, String> {
+    state.db.count_images_of_kind(&conversation_id, &kind)
+}
+
+// ── Avatars ─────────────────────────────────
+
+/// Promotes a freshly generated image out of generated_images/ into
+/// avatars/<character_id>-<variant>.<ext>. The variant in the filename is what stops
+/// the webview serving a cached copy of the previous face after a re-roll.
+#[tauri::command]
+pub fn save_character_avatar(
+    source_path: String,
+    character_id: String,
+    variant: i64,
+) -> Result<String, String> {
+    let ext = std::path::Path::new(&source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+
+    let dir = avatars_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = dir.join(format!("{character_id}-{variant}.{ext}"));
+    let dest_str = dest.to_string_lossy().to_string();
+
+    copy_image_file(&source_path, &dest_str)?;
+    let _ = std::fs::remove_file(&source_path);
+    Ok(dest_str)
+}
+
+#[tauri::command]
+pub fn delete_character_avatar(path: String) -> Result<(), String> {
+    let _ = std::fs::remove_file(path);
+    Ok(())
 }
 
 // ── Image generation ───────────────────────────────────────────

@@ -1,15 +1,23 @@
 import type {
   AppSettings,
   Character,
+  CharacterDraft,
   Conversation,
+  ConversationSummary,
   CreateCharacterInput,
+  CreateMemoryInput,
   GeneratedImage,
+  ImageKind,
+  Memory,
   Message,
   Role,
   UpdateCharacterInput,
+  UpdateMemoryInput,
+  UpsertSummaryInput,
 } from '@/types'
 import { createId } from '@/utils/id'
 import { isTauri, tauriInvoke } from './tauri'
+import seedCharacters from '@/data/default_characters.json'
 
 const STORAGE_KEYS = {
   conversations: 'mla_conversations',
@@ -17,38 +25,67 @@ const STORAGE_KEYS = {
   characters: 'mla_characters',
   settings: 'mla_settings',
   images: 'mla_generated_images',
+  memories: 'mla_memories',
+  summaries: 'mla_summaries',
 } as const
 
-const DEFAULT_CHARACTERS: Omit<Character, 'id' | 'created_at'>[] = [
-  {
-    name: 'Default Assistant',
-    description: 'A helpful, clear, and concise AI assistant.',
-    system_prompt:
-      'You are a helpful AI assistant running locally on the user\'s Mac. Be clear, accurate, and concise. Use markdown when it improves readability. If you are unsure, say so.',
-    temperature: 0.7,
-  },
-  {
-    name: 'Friendly Companion',
-    description: 'Warm, conversational, and supportive.',
-    system_prompt:
-      'You are a friendly companion named Alex. You are warm, encouraging, and conversational. You remember personal details the user shares in the current conversation and respond with empathy. Keep replies natural and human.',
-    temperature: 0.85,
-  },
-  {
-    name: 'Coding Expert',
-    description: 'Senior engineer focused on clean, practical code.',
-    system_prompt:
-      'You are an expert software engineer. Prefer practical, production-quality solutions. Use clear code examples with language tags. Explain trade-offs briefly. When debugging, reason step by step. Prefer modern best practices.',
-    temperature: 0.4,
-  },
-  {
-    name: 'Creative Writer',
-    description: 'Imaginative storyteller and writing partner.',
-    system_prompt:
-      'You are a creative writing partner. Help with stories, poems, scripts, and brainstorming. Be imaginative, vivid, and collaborative. Offer alternatives when asked. Match the tone and style the user is aiming for.',
-    temperature: 0.95,
-  },
-]
+/**
+ * Every field a character has beyond its name, with the value a brand-new character
+ * starts from. One object, so the TS type, the SQL defaults and the seed file have a
+ * single place to agree.
+ */
+export const CHARACTER_DEFAULTS: Omit<CharacterDraft, 'name'> = {
+  description: '',
+  system_prompt: '',
+  temperature: 0.7,
+  pronouns: '',
+  backstory: '',
+  personality_traits: [],
+  strengths: '',
+  weaknesses: '',
+  quirks: '',
+  core_values: '',
+  interests: [],
+  speaking_style: '',
+  response_length: 'medium',
+  emoji_usage: 'rare',
+  relationship_to_user: '',
+  user_alias: '',
+  scenario: '',
+  greeting: '',
+  example_dialogue: [],
+  boundaries: '',
+  memory_enabled: true,
+  key_memories: '',
+  appearance_prompt: '',
+  appearance_negative_prompt: '',
+  appearance_seed: null,
+  avatar_path: null,
+  avatar_variant: 0,
+  can_send_images: true,
+  selfie_style_prompt: '',
+  top_p: null,
+  max_tokens: null,
+  prompt_override_enabled: false,
+}
+
+const DEFAULT_CHARACTERS = seedCharacters as Partial<CharacterDraft>[]
+
+/**
+ * Fills in fields a stored record predates. Applied on the way out of every read in
+ * BOTH branches: localStorage has no migration mechanism at all, and this also keeps
+ * the frontend working against a Rust build that hasn't caught up yet.
+ */
+function normalizeCharacter(raw: Partial<Character>): Character {
+  return {
+    ...CHARACTER_DEFAULTS,
+    ...(raw as Partial<CharacterDraft>),
+    id: raw.id ?? createId(),
+    name: raw.name ?? 'Unnamed',
+    created_at: raw.created_at ?? nowIso(),
+    updated_at: raw.updated_at,
+  }
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   model_path: null,
@@ -76,6 +113,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   image_binary_path: null,
   image_negative_prompt:
     'blurry, low quality, distorted, deformed, ugly, bad anatomy, watermark, text',
+  user_name: '',
+  user_persona: '',
+  memory_enabled: true,
+  memory_max_facts: 200,
+  auto_image_enabled: true,
+  auto_image_max_per_conversation: 10,
+  auto_image_cooldown_turns: 2,
+  image_style_suffix:
+    'amateur phone photo, natural lighting, candid, shallow depth of field, photorealistic',
+  avatar_resolution: '512x512',
 }
 
 function nowIso() {
@@ -99,11 +146,9 @@ function writeLocal<T>(key: string, value: T) {
 function ensureLocalSeed() {
   const characters = readLocal<Character[]>(STORAGE_KEYS.characters, [])
   if (characters.length === 0) {
-    const seeded: Character[] = DEFAULT_CHARACTERS.map((c) => ({
-      ...c,
-      id: createId(),
-      created_at: nowIso(),
-    }))
+    const seeded: Character[] = DEFAULT_CHARACTERS.map((c) =>
+      normalizeCharacter({ ...c, id: createId(), created_at: nowIso() }),
+    )
     writeLocal(STORAGE_KEYS.characters, seeded)
     const settings = readLocal<AppSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS)
     settings.active_character_id = seeded[0]?.id ?? null
@@ -117,6 +162,9 @@ function ensureLocalSeed() {
   }
   if (!localStorage.getItem(STORAGE_KEYS.settings)) {
     writeLocal(STORAGE_KEYS.settings, DEFAULT_SETTINGS)
+  }
+  if (!localStorage.getItem(STORAGE_KEYS.memories)) {
+    writeLocal(STORAGE_KEYS.memories, [])
   }
   if (!localStorage.getItem(STORAGE_KEYS.images)) {
     writeLocal(STORAGE_KEYS.images, [])
@@ -215,13 +263,12 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
   const images = readLocal<GeneratedImage[]>(STORAGE_KEYS.images, [])
   return readLocal<Message[]>(STORAGE_KEYS.messages, [])
     .filter((m) => m.conversation_id === conversationId)
-    .map((m) => {
-      if (m.role === 'image') {
-        const image = images.find((img) => img.message_id === m.id) ?? null
-        return { ...m, image }
-      }
-      return m
-    })
+    // Attached by message id, not by role: a character selfie hangs off its
+    // assistant message rather than a standalone role:'image' row.
+    .map((m) => ({
+      ...m,
+      image: images.find((img) => img.message_id === m.id) ?? null,
+    }))
     .sort(
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     )
@@ -268,28 +315,32 @@ export async function updateMessageContent(
   }
 }
 
-// ── Characters ─────────────────────────────────────────────────
+// ── Characters ─────────────────────────────────
 
 export async function listCharacters(): Promise<Character[]> {
   if (isTauri()) {
-    return tauriInvoke<Character[]>('list_characters')
+    const items = await tauriInvoke<Character[]>('list_characters')
+    return items.map(normalizeCharacter)
   }
   ensureLocalSeed()
-  return readLocal<Character[]>(STORAGE_KEYS.characters, [])
+  return readLocal<Character[]>(STORAGE_KEYS.characters, []).map(normalizeCharacter)
 }
 
 export async function createCharacter(
   input: CreateCharacterInput,
 ): Promise<Character> {
   if (isTauri()) {
-    return tauriInvoke<Character>('create_character', { input })
+    const created = await tauriInvoke<Character>('create_character', {
+      input: { ...CHARACTER_DEFAULTS, ...input },
+    })
+    return normalizeCharacter(created)
   }
   ensureLocalSeed()
-  const character: Character = {
-    id: createId(),
+  const character = normalizeCharacter({
     ...input,
+    id: createId(),
     created_at: nowIso(),
-  }
+  })
   const items = readLocal<Character[]>(STORAGE_KEYS.characters, [])
   items.push(character)
   writeLocal(STORAGE_KEYS.characters, items)
@@ -300,13 +351,18 @@ export async function updateCharacter(
   input: UpdateCharacterInput,
 ): Promise<Character> {
   if (isTauri()) {
-    return tauriInvoke<Character>('update_character', { input })
+    const updated = await tauriInvoke<Character>('update_character', { input })
+    return normalizeCharacter(updated)
   }
   const items = readLocal<Character[]>(STORAGE_KEYS.characters, [])
   const idx = items.findIndex((c) => c.id === input.id)
   if (idx < 0) throw new Error('Character not found')
   const { id: _id, ...rest } = input
-  items[idx] = { ...items[idx], ...rest, updated_at: nowIso() }
+  items[idx] = normalizeCharacter({
+    ...items[idx],
+    ...rest,
+    updated_at: nowIso(),
+  })
   writeLocal(STORAGE_KEYS.characters, items)
   return items[idx]
 }
@@ -319,6 +375,210 @@ export async function deleteCharacter(id: string): Promise<void> {
     (c) => c.id !== id,
   )
   writeLocal(STORAGE_KEYS.characters, items)
+  const memories = readLocal<Memory[]>(STORAGE_KEYS.memories, []).filter(
+    (m) => m.character_id !== id,
+  )
+  writeLocal(STORAGE_KEYS.memories, memories)
+}
+
+// ── Memories ──────────────────────────────────
+
+export async function listMemories(
+  characterId?: string | null,
+): Promise<Memory[]> {
+  if (isTauri()) {
+    return tauriInvoke<Memory[]>('list_memories', {
+      characterId: characterId ?? null,
+    })
+  }
+  const all = readLocal<Memory[]>(STORAGE_KEYS.memories, [])
+  const scoped = characterId
+    ? all.filter((m) => m.character_id === characterId)
+    : all
+  return scoped.sort(
+    (a, b) =>
+      Number(b.pinned) - Number(a.pinned) || b.importance - a.importance,
+  )
+}
+
+export async function createMemory(input: CreateMemoryInput): Promise<Memory> {
+  if (isTauri()) {
+    return tauriInvoke<Memory>('create_memory', { input })
+  }
+  const ts = nowIso()
+  const memory: Memory = {
+    id: createId(),
+    character_id: input.character_id ?? null,
+    conversation_id: input.conversation_id ?? null,
+    kind: input.kind ?? 'fact',
+    content: input.content,
+    keywords: input.keywords ?? '',
+    importance: input.importance ?? 0.5,
+    pinned: input.pinned ?? false,
+    source_message_id: input.source_message_id ?? null,
+    hits: 0,
+    created_at: ts,
+    updated_at: ts,
+    last_accessed_at: null,
+  }
+  const items = readLocal<Memory[]>(STORAGE_KEYS.memories, [])
+  const duplicate = items.some(
+    (m) =>
+      m.character_id === memory.character_id &&
+      m.kind === memory.kind &&
+      m.content === memory.content,
+  )
+  if (!duplicate) {
+    items.push(memory)
+    writeLocal(STORAGE_KEYS.memories, items)
+  }
+  return memory
+}
+
+export async function updateMemory(input: UpdateMemoryInput): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('update_memory', { input })
+  }
+  const items = readLocal<Memory[]>(STORAGE_KEYS.memories, [])
+  const idx = items.findIndex((m) => m.id === input.id)
+  if (idx < 0) return
+  const { id: _id, touch_access, ...rest } = input
+  const defined = Object.fromEntries(
+    Object.entries(rest).filter(([, v]) => v !== undefined),
+  )
+  items[idx] = {
+    ...items[idx],
+    ...defined,
+    updated_at: nowIso(),
+    last_accessed_at: touch_access ? nowIso() : items[idx].last_accessed_at,
+  }
+  writeLocal(STORAGE_KEYS.memories, items)
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('delete_memory', { id })
+  }
+  writeLocal(
+    STORAGE_KEYS.memories,
+    readLocal<Memory[]>(STORAGE_KEYS.memories, []).filter((m) => m.id !== id),
+  )
+}
+
+export async function deleteMemoriesForCharacter(
+  characterId: string,
+): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('delete_memories_for_character', { characterId })
+  }
+  writeLocal(
+    STORAGE_KEYS.memories,
+    readLocal<Memory[]>(STORAGE_KEYS.memories, []).filter(
+      (m) => m.character_id !== characterId,
+    ),
+  )
+}
+
+// ── Conversation summaries ────────────────────────
+
+export async function getConversationSummary(
+  conversationId: string,
+): Promise<ConversationSummary | null> {
+  if (isTauri()) {
+    return tauriInvoke<ConversationSummary | null>('get_conversation_summary', {
+      conversationId,
+    })
+  }
+  const all = readLocal<ConversationSummary[]>(STORAGE_KEYS.summaries, [])
+  return all.find((x) => x.conversation_id === conversationId) ?? null
+}
+
+export async function upsertConversationSummary(
+  input: UpsertSummaryInput,
+): Promise<ConversationSummary | null> {
+  if (isTauri()) {
+    return tauriInvoke<ConversationSummary | null>(
+      'upsert_conversation_summary',
+      { input },
+    )
+  }
+  const all = readLocal<ConversationSummary[]>(STORAGE_KEYS.summaries, [])
+  const idx = all.findIndex((x) => x.conversation_id === input.conversation_id)
+  const currentVersion = idx >= 0 ? all[idx].version : 0
+  if (
+    input.expected_version != null &&
+    input.expected_version !== currentVersion
+  ) {
+    return null
+  }
+  const next: ConversationSummary = {
+    conversation_id: input.conversation_id,
+    summary: input.summary,
+    summarized_up_to_message_id: input.summarized_up_to_message_id,
+    summarized_up_to_created_at: input.summarized_up_to_created_at,
+    message_count: input.message_count,
+    token_estimate: input.token_estimate,
+    version: currentVersion + 1,
+    updated_at: nowIso(),
+  }
+  if (idx >= 0) all[idx] = next
+  else all.push(next)
+  writeLocal(STORAGE_KEYS.summaries, all)
+  return next
+}
+
+export async function clearConversationSummary(
+  conversationId: string,
+): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('clear_conversation_summary', { conversationId })
+  }
+  writeLocal(
+    STORAGE_KEYS.summaries,
+    readLocal<ConversationSummary[]>(STORAGE_KEYS.summaries, []).filter(
+      (x) => x.conversation_id !== conversationId,
+    ),
+  )
+}
+
+export async function countImagesOfKind(
+  conversationId: string,
+  kind: ImageKind,
+): Promise<number> {
+  if (isTauri()) {
+    return tauriInvoke<number>('count_images_of_kind', { conversationId, kind })
+  }
+  return readLocal<GeneratedImage[]>(STORAGE_KEYS.images, []).filter(
+    (img) => img.conversation_id === conversationId && img.kind === kind,
+  ).length
+}
+
+// ── Avatars ──────────────────────────────────
+
+/**
+ * Moves a freshly generated image into the avatars directory under a
+ * variant-stamped name. Outside Tauri the mock provider hands back a data URL,
+ * which is already directly usable as an `<img>` src.
+ */
+export async function saveCharacterAvatar(
+  sourcePath: string,
+  characterId: string,
+  variant: number,
+): Promise<string> {
+  if (isTauri()) {
+    return tauriInvoke<string>('save_character_avatar', {
+      sourcePath,
+      characterId,
+      variant,
+    })
+  }
+  return sourcePath
+}
+
+export async function deleteCharacterAvatar(path: string): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('delete_character_avatar', { path })
+  }
 }
 
 // ── Settings ───────────────────────────────────────────────────
@@ -350,16 +610,22 @@ export interface CreateGeneratedImageInput {
   steps: number
   cfg: number
   generation_time_ms: number
+  caption?: string
+  kind?: ImageKind
 }
 
 export async function createGeneratedImage(
   input: CreateGeneratedImageInput,
 ): Promise<GeneratedImage> {
   if (isTauri()) {
-    return tauriInvoke<GeneratedImage>('create_generated_image', { input })
+    return tauriInvoke<GeneratedImage>('create_generated_image', {
+      input: { caption: '', kind: 'user_request', ...input },
+    })
   }
   const image: GeneratedImage = {
     id: createId(),
+    caption: '',
+    kind: 'user_request',
     ...input,
     created_at: nowIso(),
   }
@@ -416,7 +682,11 @@ export async function updateSettings(
   patch: Partial<AppSettings>,
 ): Promise<AppSettings> {
   if (isTauri()) {
-    return tauriInvoke<AppSettings>('update_settings', { patch })
+    // Rust round-trips the blob through serde, so fields it doesn't know about come
+    // back missing. Without this spread the first update after adding a setting
+    // writes an un-defaulted object into the store.
+    const next = await tauriInvoke<AppSettings>('update_settings', { patch })
+    return { ...DEFAULT_SETTINGS, ...next }
   }
   const current = await getSettings()
   const next = { ...current, ...patch }

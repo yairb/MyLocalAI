@@ -1,16 +1,48 @@
 import type { ChatCompletionMessage, StreamChunk } from '@/types'
 
-export interface StreamOptions {
-  baseUrl?: string
-  model?: string
-  messages: ChatCompletionMessage[]
+/**
+ * Sampling knobs beyond the OpenAI basics. llama-server accepts all of these on
+ * /v1/chat/completions and ignores anything it doesn't recognise, so they are sent
+ * only when defined and a mismatched build degrades rather than fails.
+ */
+export interface SamplingOptions {
   temperature?: number
   top_p?: number
   max_tokens?: number
+  repeat_penalty?: number
+  repeat_last_n?: number
+  presence_penalty?: number
+  frequency_penalty?: number
+  min_p?: number
+  top_k?: number
+  stop?: string[]
+}
+
+export interface StreamOptions extends SamplingOptions {
+  baseUrl?: string
+  model?: string
+  messages: ChatCompletionMessage[]
   signal?: AbortSignal
   onToken: (token: string) => void
   onDone?: () => void
   onError?: (error: Error) => void
+}
+
+/** Drops undefined keys so the request body stays at llama-server's own defaults. */
+function samplingBody(options: SamplingOptions): Record<string, unknown> {
+  const entries: [string, unknown][] = [
+    ['temperature', options.temperature],
+    ['top_p', options.top_p],
+    ['max_tokens', options.max_tokens],
+    ['repeat_penalty', options.repeat_penalty],
+    ['repeat_last_n', options.repeat_last_n],
+    ['presence_penalty', options.presence_penalty],
+    ['frequency_penalty', options.frequency_penalty],
+    ['min_p', options.min_p],
+    ['top_k', options.top_k],
+    ['stop', options.stop?.length ? options.stop : undefined],
+  ]
+  return Object.fromEntries(entries.filter(([, v]) => v !== undefined))
 }
 
 const DEFAULT_BASE = 'http://127.0.0.1:8080'
@@ -24,13 +56,11 @@ export async function streamChatCompletion(options: StreamOptions): Promise<void
     baseUrl = DEFAULT_BASE,
     model = 'local-model',
     messages,
-    temperature = 0.7,
-    top_p = 0.9,
-    max_tokens = 2048,
     signal,
     onToken,
     onDone,
     onError,
+    ...sampling
   } = options
 
   try {
@@ -43,9 +73,12 @@ export async function streamChatCompletion(options: StreamOptions): Promise<void
       body: JSON.stringify({
         model,
         messages,
-        temperature,
-        top_p,
-        max_tokens,
+        ...samplingBody({
+          temperature: 0.7,
+          top_p: 0.9,
+          max_tokens: 2048,
+          ...sampling,
+        }),
         stream: true,
       }),
       signal,
@@ -129,13 +162,10 @@ export function buildBaseUrl(host: string, port: number): string {
   return `http://${host}:${port}`
 }
 
-export interface CompleteOptions {
+export interface CompleteOptions extends SamplingOptions {
   baseUrl?: string
   model?: string
   messages: ChatCompletionMessage[]
-  temperature?: number
-  top_p?: number
-  max_tokens?: number
   signal?: AbortSignal
 }
 
@@ -149,10 +179,8 @@ export async function completeChat(
     baseUrl = DEFAULT_BASE,
     model = 'local-model',
     messages,
-    temperature = 0.7,
-    top_p = 0.9,
-    max_tokens = 512,
     signal,
+    ...sampling
   } = options
 
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -161,9 +189,12 @@ export async function completeChat(
     body: JSON.stringify({
       model,
       messages,
-      temperature,
-      top_p,
-      max_tokens,
+      ...samplingBody({
+        temperature: 0.7,
+        top_p: 0.9,
+        max_tokens: 512,
+        ...sampling,
+      }),
       stream: false,
     }),
     signal,
@@ -224,4 +255,44 @@ export async function enhanceImagePrompt(
     .replace(/\n?```$/, '')
     .replace(/^["']|["']$/g, '')
     .trim() || userPrompt
+}
+
+/** Exact token count from llama-server. Used to calibrate the estimator, not per turn. */
+export async function tokenize(
+  text: string,
+  baseUrl = DEFAULT_BASE,
+  signal?: AbortSignal,
+): Promise<number> {
+  const res = await fetch(`${baseUrl}/tokenize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text }),
+    signal,
+  })
+  if (!res.ok) throw new Error(`tokenize failed: ${res.status}`)
+  const data = (await res.json()) as { tokens?: unknown[] }
+  if (!Array.isArray(data.tokens)) throw new Error('tokenize returned no tokens')
+  return data.tokens.length
+}
+
+/**
+ * The real context window. `--parallel` defaults to auto, which splits the configured
+ * context across server slots, so the setting alone can overstate what a request gets.
+ */
+export async function getServerContextWindow(
+  baseUrl = DEFAULT_BASE,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  try {
+    const res = await fetch(`${baseUrl}/props`, { signal })
+    if (!res.ok) return null
+    const data = (await res.json()) as {
+      default_generation_settings?: { n_ctx?: number }
+      n_ctx?: number
+    }
+    const n = data.default_generation_settings?.n_ctx ?? data.n_ctx
+    return typeof n === 'number' && n > 0 ? n : null
+  } catch {
+    return null
+  }
 }

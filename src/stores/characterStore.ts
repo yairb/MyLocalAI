@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { Character, CreateCharacterInput, UpdateCharacterInput } from '@/types'
+import type {
+  Character,
+  Conversation,
+  CreateCharacterInput,
+  UpdateCharacterInput,
+} from '@/types'
 import * as db from '@/services/database'
 import { useSettingsStore } from './settingsStore'
 
@@ -12,6 +17,9 @@ interface CharacterState {
   remove: (id: string) => Promise<void>
   setActive: (id: string) => Promise<void>
   getActive: () => Character | null
+  getById: (id: string | null | undefined) => Character | null
+  /** The character this conversation belongs to, falling back to the active one. */
+  getForConversation: (conversation: Conversation | null | undefined) => Character | null
 }
 
 export const useCharacterStore = create<CharacterState>((set, get) => ({
@@ -59,4 +67,15 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
     if (!activeId) return characters[0] ?? null
     return characters.find((c) => c.id === activeId) ?? characters[0] ?? null
   },
+
+  getById: (id) => {
+    if (!id) return null
+    return get().characters.find((c) => c.id === id) ?? null
+  },
+
+  // Conversations have carried a character_id since before this feature; this is
+  // what finally makes it authoritative. The fallback covers conversations created
+  // earlier and ones whose character has since been deleted.
+  getForConversation: (conversation) =>
+    get().getById(conversation?.character_id) ?? get().getActive(),
 }))

@@ -550,6 +550,12 @@ fn map_sampler(name: &str) -> String {
     }
 }
 
+pub fn avatars_dir() -> PathBuf {
+    let dir = app_support_dir().join("avatars");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub fn generated_images_dir() -> PathBuf {
     let dir = app_support_dir().join("generated_images");
     let _ = std::fs::create_dir_all(&dir);

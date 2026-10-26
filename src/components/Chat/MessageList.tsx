@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useChatStore } from '@/stores/chatStore'
+import { useConversationCharacter } from '@/hooks/useConversationCharacter'
 import { MessageBubble } from './MessageBubble'
 import { ImageMessageCard } from './ImageMessageCard'
 import { ImageGeneratingPlaceholder } from './ImageGeneratingPlaceholder'
@@ -18,6 +19,7 @@ export function MessageList({ onOpenSettings }: MessageListProps) {
   const isGeneratingImage = useChatStore((s) => s.isGeneratingImage)
   const cancelImageGeneration = useChatStore((s) => s.cancelImageGeneration)
   const retryImageGeneration = useChatStore((s) => s.retryImageGeneration)
+  const character = useConversationCharacter()
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -54,11 +56,15 @@ export function MessageList({ onOpenSettings }: MessageListProps) {
           msg.role === 'image' ? (
             <ImageMessageCard key={msg.id} message={msg} />
           ) : (
-            <MessageBubble key={msg.id} message={msg} />
+            <MessageBubble key={msg.id} message={msg} character={character} />
           ),
         )}
         {isGenerating && (
-          <MessageBubble streaming={streamingContent} isStreaming />
+          <MessageBubble
+            streaming={streamingContent}
+            isStreaming
+            character={character}
+          />
         )}
         {showImagePlaceholder && imageJob && (
           <ImageGeneratingPlaceholder

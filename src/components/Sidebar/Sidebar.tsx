@@ -3,6 +3,7 @@ import {
   Plus,
   Search,
   Settings,
+  ChevronRight,
   PanelLeftClose,
   PanelLeft,
 } from 'lucide-react'
@@ -10,8 +11,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { groupConversationsByDate, type DateGroup } from '@/utils/dates'
 import { ConversationItem } from './ConversationItem'
 import { cn } from '@/utils/cn'
-import { useCharacterStore } from '@/stores/characterStore'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { useConversationCharacter } from '@/hooks/useConversationCharacter'
+import { Avatar } from '@/components/UI/Avatar'
 import { searchConversations } from '@/services/database'
 import type { Conversation } from '@/types'
 
@@ -19,6 +20,7 @@ interface SidebarProps {
   open: boolean
   onToggle: () => void
   onOpenSettings: () => void
+  onOpenCharacters?: () => void
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
 }
@@ -34,6 +36,7 @@ export function Sidebar({
   open,
   onToggle,
   onOpenSettings,
+  onOpenCharacters,
   searchOpen,
   onSearchOpenChange,
 }: SidebarProps) {
@@ -42,10 +45,7 @@ export function Sidebar({
   const searchQuery = useChatStore((s) => s.searchQuery)
   const setSearchQuery = useChatStore((s) => s.setSearchQuery)
   const newChat = useChatStore((s) => s.newChat)
-  const characters = useCharacterStore((s) => s.characters)
-  const activeCharacterId = useSettingsStore((s) => s.settings?.active_character_id)
-  const character =
-    characters.find((c) => c.id === activeCharacterId) ?? characters[0] ?? null
+  const character = useConversationCharacter()
   const searchRef = useRef<HTMLInputElement>(null)
   const [searchResults, setSearchResults] = useState<Conversation[] | null>(null)
 
@@ -165,14 +165,21 @@ export function Sidebar({
         </div>
 
         <div className="shrink-0 border-t border-border-subtle p-3">
-          <div className="mb-2 rounded-xl bg-card/50 px-3 py-2.5">
-            <p className="text-[11px] uppercase tracking-wide text-muted-dim">
-              Character
-            </p>
-            <p className="mt-0.5 truncate text-sm font-medium">
-              {character?.name ?? 'Default'}
-            </p>
-          </div>
+          <button
+            onClick={onOpenCharacters}
+            className="mb-2 flex w-full items-center gap-2.5 rounded-xl bg-card/50 px-3 py-2.5 text-left transition hover:bg-card"
+          >
+            <Avatar character={character} size="sm" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-wide text-muted-dim">
+                Character
+              </p>
+              <p className="mt-0.5 truncate text-sm font-medium">
+                {character?.name ?? 'Default'}
+              </p>
+            </div>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />
+          </button>
           <button
             onClick={onOpenSettings}
             className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm text-muted transition hover:bg-card hover:text-white"

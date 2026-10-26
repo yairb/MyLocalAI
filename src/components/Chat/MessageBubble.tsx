@@ -3,14 +3,18 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy, User } from 'lucide-react'
-import type { Message } from '@/types'
+import type { Character, Message } from '@/types'
 import { cn } from '@/utils/cn'
 import { TypingIndicator } from '@/components/UI/Spinner'
+import { Avatar } from '@/components/UI/Avatar'
+import { SelfieAttachment } from './SelfieAttachment'
 
 interface MessageBubbleProps {
   message?: Message
   streaming?: string
   isStreaming?: boolean
+  /** Whose face to show beside an assistant reply. */
+  character?: Character | null
 }
 
 function CodeBlock({
@@ -64,6 +68,7 @@ export function MessageBubble({
   message,
   streaming,
   isStreaming,
+  character,
 }: MessageBubbleProps) {
   const role = message?.role ?? 'assistant'
   const content = streaming ?? message?.content ?? ''
@@ -119,8 +124,8 @@ export function MessageBubble({
   return (
     <div className="flex justify-start animate-fade-in">
       <div className="flex max-w-[90%] items-start gap-3 sm:max-w-[80%]">
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft border border-accent/20">
-          <div className="h-2.5 w-2.5 rounded-full bg-accent" />
+        <div className="mt-1">
+          <Avatar character={character ?? null} size="md" />
         </div>
         <div className="min-w-0 flex-1 pt-1">
           {isStreaming && !content ? (
@@ -133,6 +138,7 @@ export function MessageBubble({
               )}
             </div>
           )}
+          {message?.image && <SelfieAttachment image={message.image} />}
         </div>
       </div>
     </div>

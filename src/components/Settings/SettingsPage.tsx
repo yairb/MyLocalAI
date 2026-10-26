@@ -17,7 +17,7 @@ import {
   isLikelyCheckpointFilePath,
 } from '@/services/imageGeneration'
 import { Button } from '@/components/UI/Button'
-import { Input, Label, RangeField } from '@/components/UI/Input'
+import { Input, Label, RangeField, TextArea } from '@/components/UI/Input'
 import { CharacterEditor } from './CharacterEditor'
 import type {
   ImageBackend,
@@ -31,6 +31,7 @@ type Tab = 'model' | 'generation' | 'image' | 'characters' | 'appearance'
 
 interface SettingsPageProps {
   onBack: () => void
+  onOpenCharacters?: () => void
 }
 
 const TABS: { id: Tab; label: string; icon: typeof Cpu }[] = [
@@ -66,7 +67,7 @@ const IMAGE_BACKENDS: { value: ImageBackend; label: string; hint: string }[] = [
   },
 ]
 
-export function SettingsPage({ onBack }: SettingsPageProps) {
+export function SettingsPage({ onBack, onOpenCharacters }: SettingsPageProps) {
   const [tab, setTab] = useState<Tab>('model')
   const settings = useSettingsStore((s) => s.settings)
   const modelsDir = useSettingsStore((s) => s.modelsDir)
@@ -661,8 +662,113 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             )}
 
             {tab === 'characters' && (
-              <section>
-                <CharacterEditor />
+              <section className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-semibold">Characters</h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Who you talk to, and what they are allowed to do.
+                  </p>
+                </div>
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <p className="text-sm font-medium text-white">About you</p>
+                  <div>
+                    <Label>Your name</Label>
+                    <Input
+                      value={settings.user_name}
+                      onChange={(e) => void update({ user_name: e.target.value })}
+                      placeholder="What your characters call you"
+                    />
+                  </div>
+                  <div>
+                    <Label>About you</Label>
+                    <TextArea
+                      value={settings.user_persona}
+                      onChange={(e) => void update({ user_persona: e.target.value })}
+                      placeholder="Anything every character should know from the start."
+                      className="min-h-[80px]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <p className="text-sm font-medium text-white">Memory</p>
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.memory_enabled}
+                      onChange={(e) =>
+                        void update({ memory_enabled: e.target.checked })
+                      }
+                      className="h-4 w-4 rounded border-border accent-accent"
+                    />
+                    Let characters remember things between conversations
+                  </label>
+                  <RangeField
+                    label="Things to remember per character"
+                    value={settings.memory_max_facts}
+                    min={20}
+                    max={500}
+                    step={10}
+                    onChange={(memory_max_facts) => void update({ memory_max_facts })}
+                    display={String(settings.memory_max_facts)}
+                  />
+                </div>
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <div>
+                    <p className="text-sm font-medium text-white">Photos in chat</p>
+                    <p className="mt-1 text-xs text-muted">
+                      Sending a photo stops the chat model to free the GPU and then
+                      reloads it, so these limits keep a conversation moving.
+                    </p>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={settings.auto_image_enabled}
+                      onChange={(e) =>
+                        void update({ auto_image_enabled: e.target.checked })
+                      }
+                      className="h-4 w-4 rounded border-border accent-accent"
+                    />
+                    Let characters send photos of themselves
+                  </label>
+                  <RangeField
+                    label="Most photos per conversation"
+                    value={settings.auto_image_max_per_conversation}
+                    min={0}
+                    max={50}
+                    step={1}
+                    onChange={(auto_image_max_per_conversation) =>
+                      void update({ auto_image_max_per_conversation })
+                    }
+                    display={String(settings.auto_image_max_per_conversation)}
+                  />
+                  <RangeField
+                    label="Replies between photos"
+                    value={settings.auto_image_cooldown_turns}
+                    min={0}
+                    max={10}
+                    step={1}
+                    onChange={(auto_image_cooldown_turns) =>
+                      void update({ auto_image_cooldown_turns })
+                    }
+                    display={String(settings.auto_image_cooldown_turns)}
+                  />
+                  <div>
+                    <Label>Photo style</Label>
+                    <Input
+                      value={settings.image_style_suffix}
+                      onChange={(e) =>
+                        void update({ image_style_suffix: e.target.value })
+                      }
+                      placeholder="Appended to every photo a character sends"
+                    />
+                  </div>
+                </div>
+
+                <CharacterEditor onOpenCharacters={onOpenCharacters} />
               </section>
             )}
 

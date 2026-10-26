@@ -16,6 +16,7 @@ import {
 import { useChatStore } from '@/stores/chatStore'
 import { useEngineStore } from '@/stores/engineStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useConversationCharacter } from '@/hooks/useConversationCharacter'
 import { cn } from '@/utils/cn'
 
 interface ChatInputProps {
@@ -33,6 +34,9 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
   const inputFocusToken = useChatStore((s) => s.inputFocusToken)
   const error = useChatStore((s) => s.error)
   const clearError = useChatStore((s) => s.clearError)
+  const turnPhase = useChatStore((s) => s.turnPhase)
+  const queuedMessage = useChatStore((s) => s.queuedMessage)
+  const character = useConversationCharacter()
   const imageMode = useChatStore((s) => s.imageMode)
   const setImageMode = useChatStore((s) => s.setImageMode)
   const enhancePrompt = useChatStore((s) => s.enhancePrompt)
@@ -61,13 +65,21 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [value])
 
+  const photoTail =
+    turnPhase === 'composing_image' ||
+    turnPhase === 'engine_pausing' ||
+    turnPhase === 'generating_image' ||
+    turnPhase === 'engine_resuming'
+  // During the photo tail the engine is down, but blocking the composer would feel
+  // broken; sendMessage queues instead and sends once the turn finishes.
   const busy = isGenerating || (imageMode && isGeneratingImage)
   const canSend =
     value.trim().length > 0 &&
     !busy &&
     (imageMode
       ? true
-      : engineStatus === 'ready' ||
+      : photoTail ||
+        engineStatus === 'ready' ||
         engineStatus === 'idle' ||
         engineStatus === 'no_model')
 
@@ -119,6 +131,17 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
                 Dismiss
               </button>
             </div>
+          </div>
+        )}
+
+        {queuedMessage && (
+          <div className="mb-2 px-1 text-xs text-muted animate-fade-in">
+            Will send when {character?.name ?? 'the reply'} is done:{' '}
+            <span className="text-white">
+              {queuedMessage.length > 60
+                ? `${queuedMessage.slice(0, 60)}…`
+                : queuedMessage}
+            </span>
           </div>
         )}
 

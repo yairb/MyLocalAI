@@ -6,7 +6,7 @@ mod models;
 
 use commands::AppState;
 use db::Database;
-use image_gen::{generated_images_dir, image_models_dir, ImageGenManager};
+use image_gen::{avatars_dir, generated_images_dir, image_models_dir, ImageGenManager};
 use llama::{db_path, models_dir, LlamaManager};
 use tauri::Manager;
 
@@ -16,6 +16,7 @@ pub fn run() {
     let _ = std::fs::create_dir_all(models_dir());
     let _ = std::fs::create_dir_all(image_models_dir());
     let _ = std::fs::create_dir_all(generated_images_dir());
+    let _ = std::fs::create_dir_all(avatars_dir());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -83,7 +84,18 @@ pub fn run() {
             commands::pick_model_file,
             commands::get_models_dir,
             commands::list_local_models,
+            commands::get_character,
             commands::list_memories,
+            commands::create_memory,
+            commands::update_memory,
+            commands::delete_memory,
+            commands::delete_memories_for_character,
+            commands::get_conversation_summary,
+            commands::upsert_conversation_summary,
+            commands::clear_conversation_summary,
+            commands::count_images_of_kind,
+            commands::save_character_avatar,
+            commands::delete_character_avatar,
             commands::pick_image_model_file,
             commands::get_image_models_dir,
             commands::list_local_image_models,
