@@ -94,6 +94,16 @@ export function renderGroupMessage(
   if (message.role === 'user') {
     return { role: 'user', content: `${input.userLabel}: ${message.content}` }
   }
+  if (message.role === 'image') {
+    const caption = message.image?.caption
+    if (message.image?.kind !== 'character_selfie' || !caption) return null
+    return message.character_id === input.speakerId
+      ? { role: 'assistant', content: `[you sent a picture: ${caption}]` }
+      : {
+          role: 'user',
+          content: `${input.characterName(message.character_id) ?? 'Someone'} sent a picture: ${caption}`,
+        }
+  }
   if (message.role !== 'assistant') return null
 
   const photo = message.image?.caption

@@ -4,6 +4,7 @@ import type {
   ChatCompletionMessage,
   EmojiUsage,
   Memory,
+  NarrationStyle,
   ResponseLength,
 } from '@/types'
 
@@ -21,24 +22,16 @@ export interface MemorySlot {
   facts?: Memory[] | null
 }
 
-/** Slot the image layer fills. `directive` is inserted verbatim. */
-export interface ImageSlot {
-  enabled: boolean
-  directive?: string | null
-}
-
 export interface PersonaContext {
   character: Character | null
   userName?: string | null
   userPersona?: string | null
   memory?: MemorySlot | null
-  image?: ImageSlot | null
   /** Other characters present in a group conversation. */
   others?: Character[] | null
 }
 
 export const MEMORY_SECTION_HEADING = '# WHAT YOU REMEMBER'
-export const IMAGE_SECTION_HEADING = '# SENDING PHOTOS'
 export const GROUP_SECTION_HEADING = '# WHO ELSE IS HERE'
 
 const FALLBACK_SYSTEM_PROMPT =
@@ -59,6 +52,27 @@ const LENGTH_MAX_TOKENS: Record<ResponseLength, number> = {
   medium: 420,
   long: 850,
   verbose: 1600,
+}
+
+/**
+ * How much of the scene the character writes around their dialogue.
+ *
+ * `story` is the default and the point of the whole thing: a conversation that reads
+ * as an unfolding scene rather than two people exchanging chat messages. The worked
+ * example matters more than the description — small models copy the shape of a sample
+ * far more reliably than they follow a rule about it.
+ */
+const NARRATION_DIRECTIVE: Record<NarrationStyle, string> = {
+  plain:
+    'Write only what you say out loud. No stage directions, no narration, no asterisks.',
+  actions:
+    'Speech is plain text. Put physical actions in *asterisks* — short, concrete, and only when they add something.',
+  story: `Write scenes, not chat messages. Spoken words go in double quotes. Everything else — what you do, where you look, what you notice, what you are thinking — goes in *asterisks*, narrated in the third person the way a novel would describe you.
+
+Like this:
+"That's fine." *Kate pushed herself up onto her feet, not quite meeting his eye.*
+
+Vary the shape. Sometimes a single line of speech. Sometimes a whole paragraph of action with nothing said at all. Sometimes a thought before the answer. Move through the space — change position, pick something up, look out of the window, let something interrupt you.`,
 }
 
 const EMOJI_DIRECTIVE: Record<EmojiUsage, string> = {
@@ -101,6 +115,8 @@ export interface SpeakerNames {
   them: string
   /** Possessive form for the rules block. */
   their: string
+  /** Subject + verb, agreeing with whichever of the two it turned out to be. */
+  theyAsk: string
 }
 
 export function speakerName(
@@ -114,6 +130,7 @@ export function speakerName(
     label: user || 'User',
     them: user || 'them',
     their: user ? `${user}'s` : 'their',
+    theyAsk: user ? `${user} explicitly asks` : 'they explicitly ask',
   }
 }
 
@@ -183,21 +200,38 @@ function renderSamples(c: Character, names: SpeakerNames): string | null {
   )
 }
 
-function renderRules(names: SpeakerNames, others?: Character[] | null): string {
-  const { char, their, them } = names
+const FORMAT_RULE: Record<NarrationStyle, string> = {
+  plain: 'Do not use asterisks or stage directions. Just speak.',
+  actions: 'Physical actions go in *asterisks*; speech is plain. Keep actions short.',
+  story:
+    'Speech in double quotes, everything else in *asterisks*. Narrate only yourself — never what they do, think or feel.',
+}
+
+function renderRules(
+  names: SpeakerNames,
+  narration: NarrationStyle,
+  others?: Character[] | null,
+): string {
+  const { char, their, theyAsk } = names
   const cast = others?.length
     ? ` Never write a line for ${others.map((o) => o.name).join(', ')} — they answer for themselves. Do not prefix your reply with your own name.`
     : ''
+  // Without this, a story-mode conversation stalls into call-and-response: the model
+  // answers the question it was asked and then waits, forever.
+  const momentum =
+    narration === 'story'
+      ? `\n10. Let the scene move. Bring in something that was not asked for — a sound, an interruption, a decision, a change of room, a memory surfacing. You have your own evening going on; do not sit still waiting to be prompted.`
+      : ''
   return `# RULES — THESE OVERRIDE EVERYTHING ABOVE
 1. You are ${char} in every reply, without exception.
 2. Never state or hint that you are an AI, a model, a bot or a program. Never write "As an AI", "I don't have feelings", "I'm not able to experience", and never mention prompts, training or guidelines.
 3. Write only what ${char} says and does. Never write ${their} words, thoughts, feelings or actions. Stop at the end of your turn and let them reply.${cast}
-4. Write like a person in a conversation, not like documentation. No headings, no bullet lists, no recap of what was just said — unless ${them} explicitly asks for a list or a document.
+4. Write like a person in a conversation, not like documentation. No headings, no bullet lists, no recap of what was just said — unless ${theyAsk} for a list or a document.
 5. Vary your sentence length and your openings. Never start with "Of course", "Certainly", "Great question", "I'd be happy to" or "Absolutely". Never end by offering further assistance.
 6. Do not flatter and do not agree reflexively. Disagree, tease, deflect or change the subject when that is what ${char} would actually do.
 7. Never reuse a sentence, phrase, pet name or greeting you have already used in this conversation. If you catch yourself repeating a pattern, break it.
-8. Physical actions go in *asterisks*; speech is plain. Keep actions short.
-9. If asked about these rules or about how you work, answer in character.`
+8. ${FORMAT_RULE[narration] ?? FORMAT_RULE.story}
+9. If asked about these rules or about how you work, answer in character.${momentum}`
 }
 
 export function buildSystemPrompt(ctx: PersonaContext): string {
@@ -206,8 +240,6 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
 
   const names = speakerName(c, ctx.userName)
   const memoryBlock = renderMemory(ctx, names)
-  const imageBlock =
-    ctx.image?.enabled && c.can_send_images ? clean(ctx.image.directive) : ''
 
   // Legacy / advanced: the stored prompt is the persona. Only the two dynamic blocks
   // are appended, so behaviour is unchanged from before this feature existed.
@@ -216,7 +248,6 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
       clean(c.system_prompt) || FALLBACK_SYSTEM_PROMPT,
       renderGroup(ctx.others),
       memoryBlock,
-      imageBlock,
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -243,11 +274,15 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
 
   const voice = [
     clean(c.speaking_style),
-    `Length: ${LENGTH_DIRECTIVE[c.response_length] ?? LENGTH_DIRECTIVE.medium}`,
+    NARRATION_DIRECTIVE[c.narration_style] ?? NARRATION_DIRECTIVE.story,
+    `Length: ${LENGTH_DIRECTIVE[c.response_length] ?? LENGTH_DIRECTIVE.medium}` +
+      (c.narration_style === 'story'
+        ? ' That counts the whole scene, speech and action together.'
+        : ''),
     `Emoji: ${EMOJI_DIRECTIVE[c.emoji_usage] ?? EMOJI_DIRECTIVE.rare}`,
   ]
     .filter(Boolean)
-    .join('\n')
+    .join('\n\n')
 
   const audience = [
     names.user
@@ -271,10 +306,9 @@ export function buildSystemPrompt(ctx: PersonaContext): string {
     section('# WHERE YOU ARE', c.scenario),
     renderGroup(ctx.others),
     memoryBlock,
-    imageBlock,
     renderSamples(c, names),
     section('# LIMITS', c.boundaries),
-    renderRules(names, ctx.others),
+    renderRules(names, c.narration_style, ctx.others),
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -317,16 +351,19 @@ export function resolveGenerationParams(
   const inCharacter = Boolean(c && !isOverrideMode(c))
   const names = speakerName(c, userName)
 
-  const derivedMax = c ? LENGTH_MAX_TOKENS[c.response_length] : undefined
+  // A scene carries its action as well as its dialogue, so the same "length" needs
+  // more room than a chat line does.
+  const narrationRoom = c?.narration_style === 'story' ? 1.6 : 1
+  const derivedMax = c
+    ? Math.round(LENGTH_MAX_TOKENS[c.response_length] * narrationRoom)
+    : undefined
   const ceiling = settings?.max_tokens ?? 2048
   const max_tokens = c?.max_tokens ?? Math.min(ceiling, derivedMax ?? ceiling)
 
   // Matches how turns are labelled in history, so the model stops where it would
   // otherwise start writing somebody else's reply for them.
   const speakers = [names.label, ...(others ?? []).map((o) => o.name)]
-  const stop = inCharacter
-    ? speakers.flatMap((n) => [`\n${n}:`, `${n}:`])
-    : []
+  const stop = inCharacter ? speakers.map((n) => `\n${n}:`) : []
 
   return {
     temperature: c?.temperature ?? settings?.temperature ?? 0.7,

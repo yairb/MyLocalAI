@@ -50,6 +50,7 @@ export const CHARACTER_DEFAULTS: Omit<CharacterDraft, 'name'> = {
   speaking_style: '',
   response_length: 'medium',
   emoji_usage: 'rare',
+  narration_style: 'story',
   relationship_to_user: '',
   user_alias: '',
   scenario: '',
@@ -118,9 +119,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   user_persona: '',
   memory_enabled: true,
   memory_max_facts: 200,
-  auto_image_enabled: true,
-  auto_image_max_per_conversation: 10,
-  auto_image_cooldown_turns: 2,
   image_style_suffix:
     'amateur phone photo, natural lighting, candid, shallow depth of field, photorealistic',
   avatar_resolution: '512x512',

@@ -52,6 +52,7 @@ const CHARACTER_COLUMNS: &[(&str, &str)] = &[
     ("top_p", "REAL"),
     ("max_tokens", "INTEGER"),
     ("prompt_override_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("narration_style", "TEXT NOT NULL DEFAULT 'story'"),
 ];
 
 const CHARACTER_SELECT: &str = "id, name, description, system_prompt, temperature, created_at, \
@@ -60,7 +61,7 @@ const CHARACTER_SELECT: &str = "id, name, description, system_prompt, temperatur
      relationship_to_user, user_alias, scenario, greeting, example_dialogue, boundaries, \
      memory_enabled, key_memories, appearance_prompt, appearance_negative_prompt, \
      appearance_seed, avatar_path, avatar_variant, can_send_images, selfie_style_prompt, \
-     top_p, max_tokens, prompt_override_enabled";
+     top_p, max_tokens, prompt_override_enabled, narration_style";
 
 fn existing_columns(conn: &Connection, table: &str) -> Result<HashSet<String>, String> {
     let mut stmt = conn
@@ -138,6 +139,7 @@ fn map_character_row(row: &rusqlite::Row) -> rusqlite::Result<Character> {
         top_p: row.get(33)?,
         max_tokens: row.get(34)?,
         prompt_override_enabled: row.get(35)?,
+        narration_style: row.get(36)?,
     })
 }
 
@@ -852,6 +854,7 @@ impl Database {
             top_p: input.top_p,
             max_tokens: input.max_tokens,
             prompt_override_enabled: input.prompt_override_enabled,
+            narration_style: input.narration_style,
         };
 
         {
@@ -899,6 +902,7 @@ impl Database {
         if input.top_p.is_some() { c.top_p = input.top_p }
         if input.max_tokens.is_some() { c.max_tokens = input.max_tokens }
         if let Some(v) = input.prompt_override_enabled { c.prompt_override_enabled = v }
+        if let Some(v) = input.narration_style { c.narration_style = v }
         c.updated_at = Some(now());
 
         {
@@ -919,7 +923,8 @@ impl Database {
                 relationship_to_user, user_alias, scenario, greeting, example_dialogue,
                 boundaries, memory_enabled, key_memories, appearance_prompt,
                 appearance_negative_prompt, appearance_seed, avatar_path, avatar_variant,
-                can_send_images, selfie_style_prompt, top_p, max_tokens, prompt_override_enabled
+                can_send_images, selfie_style_prompt, top_p, max_tokens, prompt_override_enabled,
+                narration_style
              ) VALUES (
                 :id, :name, :description, :system_prompt, :temperature, :created_at, :updated_at,
                 :pronouns, :backstory, :personality_traits, :strengths, :weaknesses, :quirks,
@@ -927,7 +932,8 @@ impl Database {
                 :relationship_to_user, :user_alias, :scenario, :greeting, :example_dialogue,
                 :boundaries, :memory_enabled, :key_memories, :appearance_prompt,
                 :appearance_negative_prompt, :appearance_seed, :avatar_path, :avatar_variant,
-                :can_send_images, :selfie_style_prompt, :top_p, :max_tokens, :prompt_override_enabled
+                :can_send_images, :selfie_style_prompt, :top_p, :max_tokens, :prompt_override_enabled,
+                :narration_style
              )"
         } else {
             "UPDATE characters SET
@@ -946,7 +952,8 @@ impl Database {
                 appearance_seed = :appearance_seed, avatar_path = :avatar_path,
                 avatar_variant = :avatar_variant, can_send_images = :can_send_images,
                 selfie_style_prompt = :selfie_style_prompt, top_p = :top_p,
-                max_tokens = :max_tokens, prompt_override_enabled = :prompt_override_enabled
+                max_tokens = :max_tokens, prompt_override_enabled = :prompt_override_enabled,
+                narration_style = :narration_style
              WHERE id = :id"
         };
 
@@ -989,6 +996,7 @@ impl Database {
                 ":top_p": c.top_p,
                 ":max_tokens": c.max_tokens,
                 ":prompt_override_enabled": c.prompt_override_enabled,
+                ":narration_style": c.narration_style,
             },
         )
         .map_err(|e| e.to_string())?;

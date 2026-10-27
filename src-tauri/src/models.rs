@@ -116,6 +116,9 @@ pub struct Character {
     pub max_tokens: Option<i64>,
     #[serde(default)]
     pub prompt_override_enabled: bool,
+    /// How much of the scene they narrate: plain | actions | story.
+    #[serde(default = "default_narration_style")]
+    pub narration_style: String,
 }
 
 /// Everything a character can be created with. `name` is the only required field.
@@ -186,6 +189,8 @@ pub struct CreateCharacterInput {
     pub max_tokens: Option<i64>,
     #[serde(default)]
     pub prompt_override_enabled: bool,
+    #[serde(default = "default_narration_style")]
+    pub narration_style: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -224,6 +229,7 @@ pub struct UpdateCharacterInput {
     pub top_p: Option<f64>,
     pub max_tokens: Option<i64>,
     pub prompt_override_enabled: Option<bool>,
+    pub narration_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,13 +292,6 @@ pub struct AppSettings {
     #[serde(default = "default_memory_max_facts")]
     pub memory_max_facts: i64,
 
-    // Character-initiated photos
-    #[serde(default = "default_true")]
-    pub auto_image_enabled: bool,
-    #[serde(default = "default_auto_image_max")]
-    pub auto_image_max_per_conversation: i64,
-    #[serde(default = "default_auto_image_cooldown")]
-    pub auto_image_cooldown_turns: i64,
     #[serde(default = "default_image_style_suffix")]
     pub image_style_suffix: String,
     #[serde(default = "default_avatar_resolution")]
@@ -312,14 +311,11 @@ fn default_response_length() -> String {
 fn default_emoji_usage() -> String {
     "rare".into()
 }
+fn default_narration_style() -> String {
+    "story".into()
+}
 fn default_memory_max_facts() -> i64 {
     200
-}
-fn default_auto_image_max() -> i64 {
-    10
-}
-fn default_auto_image_cooldown() -> i64 {
-    2
 }
 fn default_image_style_suffix() -> String {
     "amateur phone photo, natural lighting, candid, shallow depth of field, photorealistic".into()
@@ -389,9 +385,6 @@ impl Default for AppSettings {
             user_persona: String::new(),
             memory_enabled: true,
             memory_max_facts: default_memory_max_facts(),
-            auto_image_enabled: true,
-            auto_image_max_per_conversation: default_auto_image_max(),
-            auto_image_cooldown_turns: default_auto_image_cooldown(),
             image_style_suffix: default_image_style_suffix(),
             avatar_resolution: default_avatar_resolution(),
             group_replies_per_turn: default_group_replies(),

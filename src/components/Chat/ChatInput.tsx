@@ -8,6 +8,8 @@ import {
 import {
   ArrowUp,
   ImageIcon,
+  Loader2,
+  PenLine,
   Settings,
   Sparkles,
   Square,
@@ -17,6 +19,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { useEngineStore } from '@/stores/engineStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useConversationCharacter } from '@/hooks/useConversationCharacter'
+import { useCharacterStore } from '@/stores/characterStore'
+import { suggestUserMessage } from '@/services/replyWriter'
 import { cn } from '@/utils/cn'
 
 interface ChatInputProps {
@@ -41,6 +45,8 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
   const setImageMode = useChatStore((s) => s.setImageMode)
   const enhancePrompt = useChatStore((s) => s.enhancePrompt)
   const setEnhancePrompt = useChatStore((s) => s.setEnhancePrompt)
+  const imageAsCharacter = useChatStore((s) => s.imageAsCharacter)
+  const setImageAsCharacter = useChatStore((s) => s.setImageAsCharacter)
   const engineStatus = useEngineStore((s) => s.status)
   const imageModelPath = useSettingsStore((s) => s.settings?.image_model_path)
   const settingsEnhance = useSettingsStore(
@@ -64,6 +70,18 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [value])
+
+  const messages = useChatStore((s) => s.messages)
+  const participantIds = useChatStore((s) => s.participantIds)
+  const allCharacters = useCharacterStore((s) => s.characters)
+  const userName = useSettingsStore((s) => s.settings?.user_name ?? '')
+  const userPersona = useSettingsStore((s) => s.settings?.user_persona ?? '')
+  const host = useSettingsStore((s) => s.settings?.llama_host ?? '127.0.0.1')
+  const port = useSettingsStore((s) => s.settings?.llama_port ?? 8080)
+  const [drafting, setDrafting] = useState(false)
+  const [draftError, setDraftError] = useState<string | null>(null)
+
+  const canPictureCharacter = Boolean(character?.appearance_prompt?.trim())
 
   const photoTail =
     turnPhase === 'composing_image' ||
@@ -103,6 +121,36 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
   const onSubmit = (e: FormEvent) => {
     e.preventDefault()
     void submit()
+  }
+
+  /**
+   * Drafts the user's own line. The result lands in the box for them to edit — it is
+   * never sent on their behalf.
+   */
+  const draftMessage = async () => {
+    if (drafting || engineStatus !== 'ready') return
+    setDrafting(true)
+    setDraftError(null)
+    try {
+      const cast = participantIds
+        .map((id) => allCharacters.find((c) => c.id === id))
+        .filter((c): c is NonNullable<typeof c> => Boolean(c))
+      const suggestion = await suggestUserMessage({
+        characters: cast.length ? cast : character ? [character] : [],
+        messages,
+        draft: value,
+        userName,
+        userPersona,
+        host,
+        port,
+      })
+      setValue(suggestion)
+      textareaRef.current?.focus()
+    } catch (e) {
+      setDraftError(e instanceof Error ? e.message : 'Could not write that.')
+    } finally {
+      setDrafting(false)
+    }
   }
 
   const missingImageModel =
@@ -151,16 +199,29 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
               <ImageIcon className="h-3 w-3" />
               Image mode
             </span>
-            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted">
-              <input
-                type="checkbox"
-                checked={enhancePrompt}
-                onChange={(e) => setEnhancePrompt(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border accent-accent"
-              />
-              <Sparkles className="h-3 w-3 text-accent" />
-              Enhance Prompt
-            </label>
+            {canPictureCharacter && (
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={imageAsCharacter}
+                  onChange={(e) => setImageAsCharacter(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-border accent-accent"
+                />
+                Picture of {character?.name}
+              </label>
+            )}
+            {!(canPictureCharacter && imageAsCharacter) && (
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted">
+                <input
+                  type="checkbox"
+                  checked={enhancePrompt}
+                  onChange={(e) => setEnhancePrompt(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-border accent-accent"
+                />
+                <Sparkles className="h-3 w-3 text-accent" />
+                Enhance Prompt
+              </label>
+            )}
             {!imageModelPath && (
               <button
                 type="button"
@@ -170,6 +231,15 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
                 No model configured — open Settings
               </button>
             )}
+          </div>
+        )}
+
+        {draftError && (
+          <div className="mb-2 flex items-center justify-between gap-3 px-1 text-xs text-danger animate-fade-in">
+            <span>{draftError}</span>
+            <button onClick={() => setDraftError(null)} className="text-muted hover:text-white">
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -211,12 +281,42 @@ export function ChatInput({ onOpenSettings }: ChatInputProps) {
             onKeyDown={onKeyDown}
             placeholder={
               imageMode
-                ? 'Describe an image… e.g. a futuristic Tokyo skyline'
+                ? canPictureCharacter && imageAsCharacter
+                  ? `Where is ${character?.name}, and doing what?`
+                  : 'Describe an image… e.g. a futuristic Tokyo skyline'
                 : 'Message your AI…'
             }
             rows={1}
             className="chat-textarea max-h-[200px] min-h-[28px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-relaxed text-white outline-none placeholder:text-muted-dim"
           />
+
+          {!imageMode && (
+            <button
+              type="button"
+              onClick={() => void draftMessage()}
+              disabled={drafting || busy || engineStatus !== 'ready'}
+              className={cn(
+                'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition',
+                drafting || busy || engineStatus !== 'ready'
+                  ? 'cursor-not-allowed bg-card text-muted-dim opacity-50'
+                  : 'bg-card text-muted hover:bg-card-hover hover:text-white',
+              )}
+              aria-label={value.trim() ? 'Improve what I wrote' : 'Suggest something to say'}
+              title={
+                engineStatus !== 'ready'
+                  ? 'Needs the chat model running'
+                  : value.trim()
+                    ? 'Improve what I wrote'
+                    : 'Suggest something to say'
+              }
+            >
+              {drafting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <PenLine className="h-4 w-4" />
+              )}
+            </button>
+          )}
 
           {isGenerating ? (
             <button

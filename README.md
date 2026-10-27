@@ -31,9 +31,16 @@ relationship with you, and a face that stays the same in every picture.
 - **Memory.** A rolling summary keeps the thread of a long conversation, and durable
   facts about you are remembered across conversations. Both are visible and editable
   under Memory in the Studio — pin what matters, delete what's wrong.
-- **Photos in chat.** A character can send a photo of itself, either because you asked
-  or because the moment calls for it. Generating one stops the chat model to free the
-  GPU and then reloads it, so Settings → Characters caps how often that can happen.
+- **Replies that read as scenes.** Narration is a per-character setting. On *Story* —
+  the default — speech goes in quotes and everything else is narrated in asterisks:
+  `"That's fine." *Kate pushed herself up onto her feet, not quite meeting his eye.*`
+  The character is told to move the scene along rather than wait to be prompted, so a
+  long conversation turns into a story instead of call-and-response. *With actions* and
+  *Dialogue only* are there for characters that shouldn't do that.
+- **Pictures on request.** Ask with the wand button and the picture is of the
+  character, using their appearance and locked seed. Characters do *not* decide to send
+  pictures on their own: generating one stops llama-server to free the GPU and reloads
+  it afterwards, which mid-reply reads as the app hanging.
 - **Per conversation.** Each chat remembers whose it is; switch with the name in the
   header.
 - **Group chats.** Add more characters to a conversation from the same menu. Each one
@@ -42,7 +49,9 @@ relationship with you, and a face that stays the same in every picture.
   otherwise whoever has been quiet longest speaks, never twice in a row. Settings →
   Characters sets how many of them answer a single message.
 - **Written with the model.** Every text field in the Studio has a button that writes
-  it from the rest of the sheet, or sharpens what's already there.
+  it from the rest of the sheet, or sharpens what's already there. The chat box has one
+  too, for your own side of the conversation — it fills the composer so you can edit
+  before sending, never sends for you.
 
 The original prompt-only assistants (Default Assistant, Coding Expert, Creative
 Writer) keep working exactly as before — they simply use their own system prompt.
@@ -209,9 +218,13 @@ which would cost a whole prompt evaluation before any of the reply.
 `src/services/characterWriter.ts` writes or rewrites one field of a character sheet,
 always in the context of the fields already filled in.
 
-`src/services/imageDirector.ts` handles a character deciding to send a photo. The model
-marks it inline as `[IMG: what the photo shows]`; an incremental filter holds back any
-text that might still turn into that tag, so it never flashes mid-stream.
+`src/services/replyWriter.ts` drafts the user's own next line, matching the narration
+style of whoever spoke last.
+
+`src/services/imageDirector.ts` composes character-consistent image prompts. It also
+strips a stray `[IMG: ...]` sentinel from a reply — characters no longer decide to send
+pictures, but a model trained on that pattern may still emit one, and stripping it beats
+showing the user raw brackets.
 
 ## License
 

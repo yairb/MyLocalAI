@@ -22,12 +22,7 @@ import {
   createEstimator,
   packContext,
 } from '@/services/contextBudget'
-import {
-  IMAGE_REQUEST_NUDGE,
-  PHOTO_INSTRUCTIONS,
-  createSentinelFilter,
-  looksLikeImageRequest,
-} from '@/services/imageDirector'
+import { createSentinelFilter } from '@/services/imageDirector'
 import {
   cancelBackgroundWork,
   scheduleMemoryWork,
@@ -86,10 +81,14 @@ function renderForModel(message: Message): ChatCompletionMessage | null {
   if (message.role === 'user') {
     return { role: 'user', content: message.content }
   }
-  if (message.role !== 'assistant') {
-    // Standalone tool images stay out of history, as before.
-    return null
+  if (message.role === 'image') {
+    // A picture of the character is part of the scene; a generic tool image is not.
+    const caption = message.image?.caption
+    return message.image?.kind === 'character_selfie' && caption
+      ? { role: 'assistant', content: `[you sent a picture: ${caption}]` }
+      : null
   }
+  if (message.role !== 'assistant') return null
   // Closes the continuity hole: without this the character has no idea it just sent
   // a photo, and the next turn reads as though nothing happened.
   const caption = message.image?.caption
@@ -108,17 +107,6 @@ function renderForModel(message: Message): ChatCompletionMessage | null {
 function stripOwnName(text: string, name: string): string {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return text.replace(new RegExp(`^\\s*${escaped}\\s*:\\s*`, 'i'), '').trim()
-}
-
-function countTurnsSinceLastSelfie(messages: Message[]): number {
-  let turns = 0
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i]
-    if (m.role !== 'assistant') continue
-    if (m.image?.kind === 'character_selfie') return turns
-    turns += 1
-  }
-  return Number.POSITIVE_INFINITY
 }
 
 /** Persists the character's opening line so it is part of history, not just UI. */
@@ -166,6 +154,8 @@ interface ChatState {
   imageJob: ImageGenerationJob | null
   imageMode: boolean
   enhancePrompt: boolean
+  /** Compose the picture around the conversation's character, with their locked seed. */
+  imageAsCharacter: boolean
 
   loadConversations: () => Promise<void>
   setSearchQuery: (q: string) => void
@@ -182,6 +172,7 @@ interface ChatState {
 
   setImageMode: (enabled: boolean) => void
   setEnhancePrompt: (enabled: boolean) => void
+  setImageAsCharacter: (enabled: boolean) => void
   generateImage: (prompt: string) => Promise<void>
   regenerateImage: (messageId: string) => Promise<void>
   deleteImageMessage: (messageId: string) => Promise<void>
@@ -249,6 +240,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     imageJob: null,
     imageMode: false,
     enhancePrompt: true,
+    imageAsCharacter: true,
 
     loadConversations: async () => {
       const conversations = await db.listConversations()
@@ -346,6 +338,8 @@ export const useChatStore = create<ChatState>((set, get) => {
       set({ enhancePrompt: enabled })
       void useSettingsStore.getState().update({ image_enhance_prompt: enabled })
     },
+
+    setImageAsCharacter: (enabled) => set({ imageAsCharacter: enabled }),
 
     sendMessage: async (content) => {
       const trimmed = content.trim()
@@ -489,11 +483,20 @@ export const useChatStore = create<ChatState>((set, get) => {
         conversations: await db.listConversations(),
       })
 
+      // With a character in the conversation the picture is of them: their appearance
+      // leads the prompt and their seed is reused, so the face stays the same.
+      const subject = resolveParticipants(conversationId)[0] ?? null
+      const asCharacter =
+        get().imageAsCharacter && Boolean(subject?.appearance_prompt.trim())
+
       await runJob({
         conversationId,
         originalPrompt: trimmed,
-        enhance: get().enhancePrompt,
-        kind: 'user_request',
+        enhance: !asCharacter && get().enhancePrompt,
+        character: asCharacter ? subject : null,
+        scene: asCharacter ? trimmed : undefined,
+        kind: asCharacter ? 'character_selfie' : 'user_request',
+        caption: asCharacter ? trimmed : undefined,
       })
       set({ imageMode: false })
     },
@@ -617,13 +620,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     const isGroup = participants.length > 1
     const others = isGroup ? participants.filter((c) => c.id !== speaker.id) : null
 
-    const userName = settings?.user_name?.trim() || 'the user'
     const userLabel = settings?.user_name?.trim() || 'User'
-    const photosAvailable = Boolean(
-      speaker.can_send_images &&
-        settings?.auto_image_enabled &&
-        settings?.image_model_path,
-    )
 
     const [summaryRow, allMemories] = await Promise.all([
       db.getConversationSummary(conversationId),
@@ -646,12 +643,6 @@ export const useChatStore = create<ChatState>((set, get) => {
       userName: settings?.user_name,
       userPersona: settings?.user_persona,
       memory: { summary: summaryRow?.summary ?? null, facts },
-      image: {
-        enabled: photosAvailable,
-        directive: photosAvailable
-          ? PHOTO_INSTRUCTIONS(speaker.name, userName)
-          : null,
-      },
       others,
     })
 
@@ -685,13 +676,6 @@ export const useChatStore = create<ChatState>((set, get) => {
     const chatMessages = isGroup
       ? coalesce(packed.chatMessages)
       : [...packed.chatMessages]
-
-    if (photosAvailable && options.userText && looksLikeImageRequest(options.userText)) {
-      chatMessages.splice(chatMessages.length - 1, 0, {
-        role: 'system',
-        content: IMAGE_REQUEST_NUDGE(userName),
-      })
-    }
 
     const baseUrl = buildBaseUrl(
       settings?.llama_host ?? '127.0.0.1',
@@ -744,39 +728,17 @@ export const useChatStore = create<ChatState>((set, get) => {
       return false
     }
 
-    const { text, scenes } = filter.flush()
+    // The filter stays as a safety net: a model that emits an image tag anyway gets
+    // it stripped from the reply rather than showing the user raw brackets.
+    const { text } = filter.flush()
     // The model occasionally labels its own line despite being told not to.
     const replyText =
       stripOwnName(text || rawReply.trim(), speaker.name) || '…'
 
     // Saved before anything image-related: a failed photo must not cost the reply.
-    const assistantMsg = await db.addMessage(
-      conversationId,
-      'assistant',
-      replyText,
-      speaker.id,
-    )
+    await db.addMessage(conversationId, 'assistant', replyText, speaker.id)
     await refreshAfterTurn(conversationId)
-    set({ streamingContent: '', abortController: null })
-
-    const scene = scenes[0]
-    if (photosAvailable && scene) {
-      const cooldown = settings?.auto_image_cooldown_turns ?? 2
-      const cap = settings?.auto_image_max_per_conversation ?? 10
-      const sent = await db.countImagesOfKind(conversationId, 'character_selfie')
-      const sinceLast = countTurnsSinceLastSelfie(get().messages)
-
-      if (sent < cap && sinceLast >= cooldown) {
-        await sendSelfie({
-          conversationId,
-          messageId: assistantMsg.id,
-          character: speaker,
-          scene,
-        })
-      }
-    }
-
-    set({ speakingCharacterId: null })
+    set({ streamingContent: '', abortController: null, speakingCharacterId: null })
     return true
   }
 
@@ -796,6 +758,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     scene?: string
     caption?: string
     attachToMessageId?: string | null
+    characterId?: string | null
   }): Promise<boolean> {
     const settings = useSettingsStore.getState().settings
     const id = createId()
@@ -829,6 +792,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           enhance: options.enhance,
           caption: options.caption,
           attachToMessageId: options.attachToMessageId,
+          characterId: options.characterId ?? options.character?.id ?? null,
         },
         {
           signal: controller.signal,
@@ -872,26 +836,5 @@ export const useChatStore = create<ChatState>((set, get) => {
       setPhase('idle')
       return false
     }
-  }
-
-  /**
-   * The photo tail of a chat turn: the reply is already saved, so a failure here
-   * leaves a normal message plus an error chip rather than losing the turn.
-   */
-  async function sendSelfie(options: {
-    conversationId: string
-    messageId: string
-    character: Character
-    scene: string
-  }): Promise<void> {
-    await runJob({
-      conversationId: options.conversationId,
-      originalPrompt: options.scene,
-      kind: 'character_selfie',
-      character: options.character,
-      scene: options.scene,
-      caption: options.scene,
-      attachToMessageId: options.messageId,
-    })
   }
 })

@@ -739,53 +739,21 @@ export function SettingsPage({ onBack, onOpenCharacters }: SettingsPageProps) {
 
                 <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
                   <div>
-                    <p className="text-sm font-medium text-white">Photos in chat</p>
+                    <p className="text-sm font-medium text-white">Pictures of characters</p>
                     <p className="mt-1 text-xs text-muted">
-                      Sending a photo stops the chat model to free the GPU and then
-                      reloads it, so these limits keep a conversation moving.
+                      Ask for a picture with the wand button in the chat. When a
+                      character is in the conversation their appearance and locked seed
+                      are used, so it is the same face every time.
                     </p>
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={settings.auto_image_enabled}
-                      onChange={(e) =>
-                        void update({ auto_image_enabled: e.target.checked })
-                      }
-                      className="h-4 w-4 rounded border-border accent-accent"
-                    />
-                    Let characters send photos of themselves
-                  </label>
-                  <RangeField
-                    label="Most photos per conversation"
-                    value={settings.auto_image_max_per_conversation}
-                    min={0}
-                    max={50}
-                    step={1}
-                    onChange={(auto_image_max_per_conversation) =>
-                      void update({ auto_image_max_per_conversation })
-                    }
-                    display={String(settings.auto_image_max_per_conversation)}
-                  />
-                  <RangeField
-                    label="Replies between photos"
-                    value={settings.auto_image_cooldown_turns}
-                    min={0}
-                    max={10}
-                    step={1}
-                    onChange={(auto_image_cooldown_turns) =>
-                      void update({ auto_image_cooldown_turns })
-                    }
-                    display={String(settings.auto_image_cooldown_turns)}
-                  />
                   <div>
-                    <Label>Photo style</Label>
+                    <Label>Picture style</Label>
                     <Input
                       value={settings.image_style_suffix}
                       onChange={(e) =>
                         void update({ image_style_suffix: e.target.value })
                       }
-                      placeholder="Appended to every photo a character sends"
+                      placeholder="Appended to every picture a character appears in"
                     />
                   </div>
                 </div>

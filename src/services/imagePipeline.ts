@@ -49,6 +49,8 @@ export interface RunImageGenerationInput {
   caption?: string
   /** Attach to an existing message instead of minting a role:'image' one. */
   attachToMessageId?: string | null
+  /** Credits the picture to a character, so it can be rendered and recalled as theirs. */
+  characterId?: string | null
   /** false for avatars: generate the file, write nothing to the conversation. */
   persist?: boolean
   portrait?: boolean
@@ -217,7 +219,12 @@ export async function runImageGeneration(
 
   const message =
     input.attachToMessageId === undefined || input.attachToMessageId === null
-      ? await db.addMessage(input.conversationId, 'image', input.originalPrompt)
+      ? await db.addMessage(
+          input.conversationId,
+          'image',
+          input.originalPrompt,
+          input.characterId ?? null,
+        )
       : null
 
   const messageId = input.attachToMessageId ?? message?.id

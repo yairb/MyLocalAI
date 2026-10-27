@@ -1,10 +1,13 @@
 /**
- * Lets a character decide, mid-reply, to send a photo of itself.
+ * Image prompt helpers, plus a guard against stray image sentinels.
  *
- * The model marks it with an inline sentinel rather than an OpenAI tool call: tool
- * calling depends on the GGUF's chat template having a tools branch, which most
- * roleplay finetunes don't, and the structured mode visibly flattens the prose. The
- * sentinel also carries *what* the photo shows, which a yes/no classifier pass can't.
+ * Characters used to be able to decide mid-reply to send a photo. That is gone:
+ * generating one stops llama-server to free the GPU and then reloads it, which in the
+ * middle of a turn reads as the app hanging. Pictures are asked for explicitly now.
+ *
+ * The sentinel parser stays as a safety net. A model that has seen this pattern in
+ * training may emit `[IMG: ...]` unprompted, and stripping it is better than showing
+ * the user raw brackets.
  */
 
 const OPEN_TAG = '[IMG:'
@@ -86,40 +89,6 @@ export function createSentinelFilter(): SentinelFilter {
     },
   }
 }
-
-export const PHOTO_INSTRUCTIONS = (char: string, user: string): string =>
-  `# SENDING PHOTOS
-You have a phone and you can send ${user} a photo of yourself.
-
-To send one, write this on its own line at the end of your reply:
-[IMG: what the photo shows]
-
-Describe only what is visible in the photo — where you are, what you are wearing, your pose and expression, the light, the time of day. Write it as a photo caption, not as a sentence to ${user}.
-Do not describe your face, hair, body or age: that is already known.
-
-Example:
-Still stuck at the office, it's awful. *holds up the phone* Look at this view though.
-[IMG: standing by a floor-to-ceiling office window at dusk, city lights below, grey blazer, tired smile, phone raised in the reflection]
-
-Send a photo only when it is natural — ${user} asked to see something, or you are somewhere or doing something worth showing. Most replies have no photo. Never send two in a row. Never mention the brackets, and never say that you cannot send pictures. You are ${char}; you have a camera like anyone else.`
-
-const REQUEST_VERBS =
-  /\b(send|show|share|take|snap|post|give)\b.*\b(pic|pics|picture|photo|photos|selfie|selfies|image|shot)\b/i
-const APPEARANCE_QUESTION =
-  /\b(what|how)\b.*\b(you|u)\b.*\b(look|looks|looking)\b|\blet me see\b|\bsee you\b|\bsend me one\b/i
-
-/**
- * Whether the user is plainly asking to see the character. Small models often answer
- * "sure, here you go!" without emitting the tag, so this triggers a one-off nudge.
- */
-export function looksLikeImageRequest(text: string): boolean {
-  const t = text.trim()
-  if (t.length > 300) return false
-  return REQUEST_VERBS.test(t) || APPEARANCE_QUESTION.test(t)
-}
-
-export const IMAGE_REQUEST_NUDGE = (user: string): string =>
-  `${user} is asking to see you. Reply in character and end your reply with an [IMG: ...] line describing the photo you send.`
 
 const SCENE_ENHANCER_SYSTEM = `You expand a short photo description into Stable Diffusion scene tags.
 You are given a SUBJECT that is already fixed. Never describe the subject's face, hair, body, age, or identity.

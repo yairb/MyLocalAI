@@ -2,6 +2,8 @@ export type Role = 'system' | 'user' | 'assistant' | 'image'
 
 export type ResponseLength = 'terse' | 'short' | 'medium' | 'long' | 'verbose'
 export type EmojiUsage = 'none' | 'rare' | 'frequent'
+/** How much of the scene the character narrates around their dialogue. */
+export type NarrationStyle = 'plain' | 'actions' | 'story'
 
 /** One style sample: how the user speaks, how the character answers. */
 export interface ExampleExchange {
@@ -36,6 +38,7 @@ export interface Character {
   speaking_style: string
   response_length: ResponseLength
   emoji_usage: EmojiUsage
+  narration_style: NarrationStyle
 
   // Relationship and scene
   relationship_to_user: string
@@ -238,10 +241,7 @@ export interface AppSettings {
   memory_enabled: boolean
   memory_max_facts: number
 
-  // Character-initiated photos
-  auto_image_enabled: boolean
-  auto_image_max_per_conversation: number
-  auto_image_cooldown_turns: number
+  /** Appended to pictures a character appears in. */
   image_style_suffix: string
   avatar_resolution: ImageResolution
 

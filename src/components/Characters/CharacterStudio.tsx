@@ -11,7 +11,13 @@ import {
   Sparkles,
   User,
 } from 'lucide-react'
-import type { Character, CharacterDraft, EmojiUsage, ResponseLength } from '@/types'
+import type {
+  Character,
+  CharacterDraft,
+  EmojiUsage,
+  NarrationStyle,
+  ResponseLength,
+} from '@/types'
 import { CHARACTER_DEFAULTS } from '@/services/database'
 import {
   isListField,
@@ -60,6 +66,19 @@ const LENGTHS: { value: ResponseLength; label: string }[] = [
   { value: 'long', label: 'Long' },
   { value: 'verbose', label: 'Verbose' },
 ]
+
+const NARRATION: { value: NarrationStyle; label: string }[] = [
+  { value: 'plain', label: 'Dialogue only' },
+  { value: 'actions', label: 'With actions' },
+  { value: 'story', label: 'Story' },
+]
+
+const NARRATION_HINT: Record<NarrationStyle, string> = {
+  plain: 'Only what they say out loud. Best for assistants.',
+  actions: 'Speech plain, with short *actions* in asterisks.',
+  story:
+    'Speech in quotes, everything else narrated in *asterisks* — "That\u2019s fine." *Kate pushed herself up onto her feet.* The conversation reads as a scene.',
+}
 
 const EMOJI: { value: EmojiUsage; label: string }[] = [
   { value: 'none', label: 'None' },
@@ -388,6 +407,17 @@ export function CharacterStudio({
                   />
                 </div>
                 <div>
+                  <Label>Narration</Label>
+                  <Segmented
+                    value={draft.narration_style}
+                    options={NARRATION}
+                    onChange={(v) => set('narration_style', v)}
+                  />
+                  <p className="mt-2 text-xs text-muted">
+                    {NARRATION_HINT[draft.narration_style]}
+                  </p>
+                </div>
+                <div>
                   <Label>Reply length</Label>
                   <Segmented
                     value={draft.response_length}
@@ -557,15 +587,10 @@ export function CharacterStudio({
                   </div>
                 </div>
 
-                <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white">
-                  <input
-                    type="checkbox"
-                    checked={draft.can_send_images}
-                    onChange={(e) => set('can_send_images', e.target.checked)}
-                    className="h-4 w-4 rounded border-border accent-accent"
-                  />
-                  Can send photos of themselves during a conversation
-                </label>
+                <p className="text-xs text-muted">
+                  When you ask for a picture in the chat, this description and the
+                  locked seed are used so it is recognisably them.
+                </p>
               </>
             )}
 
