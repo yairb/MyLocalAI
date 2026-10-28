@@ -7,6 +7,9 @@ pub struct Conversation {
     pub character_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The user's own steer for this scene, injected near the generation point.
+    #[serde(default)]
+    pub scene_note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +239,8 @@ pub struct UpdateCharacterInput {
 pub struct ConversationPatch {
     pub title: Option<String>,
     pub character_id: Option<String>,
+    #[serde(default)]
+    pub scene_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +305,16 @@ pub struct AppSettings {
     // Group conversations
     #[serde(default = "default_group_replies")]
     pub group_replies_per_turn: i64,
+
+    // Character sampling. DRY suppresses repeated phrases; XTC drops the most likely
+    // continuation part of the time, which is where stock phrasing comes from. Both are
+    // a matter of taste, so both are reachable from Settings rather than hardcoded.
+    #[serde(default = "default_dry_multiplier")]
+    pub dry_multiplier: f64,
+    #[serde(default = "default_xtc_probability")]
+    pub xtc_probability: f64,
+    #[serde(default = "default_xtc_threshold")]
+    pub xtc_threshold: f64,
 }
 
 fn default_temperature() -> f64 {
@@ -325,6 +340,15 @@ fn default_avatar_resolution() -> String {
 }
 fn default_group_replies() -> i64 {
     1
+}
+fn default_dry_multiplier() -> f64 {
+    0.8
+}
+fn default_xtc_probability() -> f64 {
+    0.0
+}
+fn default_xtc_threshold() -> f64 {
+    0.1
 }
 fn default_image_resolution() -> String {
     "512x512".into()
@@ -388,6 +412,9 @@ impl Default for AppSettings {
             image_style_suffix: default_image_style_suffix(),
             avatar_resolution: default_avatar_resolution(),
             group_replies_per_turn: default_group_replies(),
+            dry_multiplier: default_dry_multiplier(),
+            xtc_probability: default_xtc_probability(),
+            xtc_threshold: default_xtc_threshold(),
         }
     }
 }
@@ -541,6 +568,10 @@ fn default_importance() -> f64 {
 pub struct ConversationSummary {
     pub conversation_id: String,
     pub summary: String,
+    /// Where the scene physically is: place, time, who is present. Written by its own
+    /// background pass, which refreshes far more often than the summary folds.
+    #[serde(default)]
+    pub scene: String,
     pub summarized_up_to_message_id: Option<String>,
     pub summarized_up_to_created_at: Option<String>,
     pub message_count: i64,

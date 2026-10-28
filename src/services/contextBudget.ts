@@ -54,6 +54,19 @@ export async function resolveContextWindow(
   return reported ?? fallback
 }
 
+/**
+ * A directive placed near the end of the history rather than in the system prompt.
+ *
+ * A 4k-window model stops attending to the top of its context once a scene is a dozen
+ * turns long, which is exactly when the format and momentum rules are needed most. The
+ * note is cheap — a few dozen tokens — and sits where the model is still looking.
+ */
+export interface DepthNote {
+  content: string
+  /** How many messages follow it. 1 puts it directly above the newest turn. */
+  depth: number
+}
+
 export interface BudgetInput {
   contextWindow: number
   /** The ceiling from settings; the reply reservation is clamped below it. */
@@ -63,6 +76,8 @@ export interface BudgetInput {
   estimator: TokenEstimator
   /** Renders a message for the model — e.g. folding a photo caption into the text. */
   renderMessage?: (message: Message) => ChatCompletionMessage | null
+  /** Injected into the packed history once it is built. */
+  depthNote?: DepthNote | null
 }
 
 export interface PackedContext {
@@ -102,7 +117,13 @@ export function packContext(input: BudgetInput): PackedContext {
   const available = Math.max(0, contextWindow - replyReservation - safety)
 
   const personaTokens = estimator.estimate(persona) + PER_MESSAGE_TOKENS
-  let remaining = available - personaTokens
+
+  // Charged before the walk, never after: the note must not be the thing that pushes a
+  // request over the window, and a turn is worth more than the directive about it.
+  const note = input.depthNote?.content.trim() ? input.depthNote : null
+  const noteTokens = note ? estimator.estimate(note.content) + PER_MESSAGE_TOKENS : 0
+
+  let remaining = available - personaTokens - noteTokens
 
   const rendered = messages
     .map((m) => ({ message: m, chat: render(m) }))
@@ -138,6 +159,13 @@ export function packContext(input: BudgetInput): PackedContext {
     dropped = i + 1
     overflow = true
     break
+  }
+
+  // Counted from the end, so the note keeps its distance from the generation point
+  // however much history happened to fit.
+  if (note) {
+    const at = Math.max(0, kept.length - note.depth)
+    kept.splice(at, 0, { role: 'user', content: note.content })
   }
 
   const chatMessages: ChatCompletionMessage[] = [

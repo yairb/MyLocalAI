@@ -41,6 +41,12 @@ relationship with you, and a face that stays the same in every picture.
   character, using their appearance and locked seed. Characters do *not* decide to send
   pictures on their own: generating one stops llama-server to free the GPU and reloads
   it afterwards, which mid-reply reads as the app hanging.
+- **Continuity.** A short state block — where you are, what time it is, who is present,
+  what is physically going on — is rebuilt in the background every few turns and read
+  back on the next one, so a character who walked into the kitchen is still in it. The
+  **Scene** button in the header is your own half of that: a line about right now ("it
+  has started raining", "she is still annoyed about earlier") that is read every turn
+  and never spoken aloud.
 - **Per conversation.** Each chat remembers whose it is; switch with the name in the
   header.
 - **Group chats.** Add more characters to a conversation from the same menu. Each one
@@ -53,8 +59,21 @@ relationship with you, and a face that stays the same in every picture.
   too, for your own side of the conversation — it fills the composer so you can edit
   before sending, never sends for you.
 
+- **Written to be reread.** The rules a small model forgets first — the narration
+  format, not writing your half, keeping the scene moving — live in a short bracketed
+  note placed next to the turn being answered rather than at the top of the prompt,
+  which is where a 4k window stops being read once a scene gets long. They are stated
+  there and nowhere else: moving them out of the system prompt left the standing cost
+  of a character *lower* than before the note existed, and the Studio counts both.
+- **Anti-repetition that doesn't flatten the prose.** Characters are sampled with DRY,
+  which penalises a repeated *phrase*, instead of the token-count penalties, which
+  penalise "the" and "she" and quietly push a long reply into odd word choices.
+  Settings → Characters has the dial, plus an off-by-default *Surprise* (XTC) for
+  prose that reaches for the stock phrase less often.
+
 The original prompt-only assistants (Default Assistant, Coding Expert, Creative
-Writer) keep working exactly as before — they simply use their own system prompt.
+Writer) keep working exactly as before — they simply use their own system prompt, and
+none of the character sampling applies to them.
 
 Long conversations are also now budgeted against the model's real context window,
 which it reads from the running server. Before this, a chat that outgrew the window
@@ -140,12 +159,17 @@ If you prefer to run the server yourself:
 llama-server \
   --model "$HOME/Library/Application Support/MyLocalAI/models/mythomax-l2-13b.Q4_K_M.gguf" \
   --ctx-size 4096 \
+  --parallel 1 \
   --host 127.0.0.1 \
   --port 8080 \
   --n-gpu-layers 99
 ```
 
 The app will detect a healthy server on `http://127.0.0.1:8080`.
+
+`--parallel 1` matters: the server's default splits `--ctx-size` across slots, and the
+app reads the **per-slot** window back from `/props` — so without it a 4096 window can
+silently become 2048 and the only symptom is that characters forget faster.
 
 ## Production build
 
@@ -202,7 +226,18 @@ unchanged — that is how the original assistants keep working.
 
 `src/services/contextBudget.ts` packs the conversation into the window: persona first,
 then a capped memory block, then as many recent turns as fit, walking backwards. The
-token estimator is calibrated once per model load against the server's `/tokenize`.
+token estimator is calibrated once per model load against the server's `/tokenize`. It
+also splices in the depth note — charged against the budget *before* the backward walk,
+so the directive can never be the thing that costs you a turn. The Character Studio
+preview shows what a persona costs and what it leaves for the conversation, because the
+only real fix for a 4096 window is seeing the price of a field while you write it.
+
+`src/services/memory/scene.ts` keeps the physical continuity: four fixed lines (place,
+time, who is present, what is happening) regenerated from a short tail every few turns.
+It is a snapshot rather than a fold, so it has its own low threshold and runs first in
+the background pass — it is the cheapest of the three and the one the next reply reads.
+It writes only the `scene` column and deliberately never touches `version`, which the
+summarizer's optimistic check depends on.
 
 `src/services/memory/` runs after a reply is on screen, never before: it folds older
 turns into a rolling summary and extracts durable facts, both guarded by an in-flight

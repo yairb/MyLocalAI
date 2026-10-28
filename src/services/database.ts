@@ -123,6 +123,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     'amateur phone photo, natural lighting, candid, shallow depth of field, photorealistic',
   avatar_resolution: '512x512',
   group_replies_per_turn: 1,
+  dry_multiplier: 0.8,
+  xtc_probability: 0,
+  xtc_threshold: 0.1,
 }
 
 function nowIso() {
@@ -201,6 +204,7 @@ export async function createConversation(
     character_id: characterId ?? null,
     created_at: nowIso(),
     updated_at: nowIso(),
+    scene_note: '',
   }
   const items = readLocal<Conversation[]>(STORAGE_KEYS.conversations, [])
   items.unshift(conv)
@@ -210,7 +214,7 @@ export async function createConversation(
 
 export async function updateConversation(
   id: string,
-  patch: Partial<Pick<Conversation, 'title' | 'character_id'>>,
+  patch: Partial<Pick<Conversation, 'title' | 'character_id' | 'scene_note'>>,
 ): Promise<Conversation> {
   if (isTauri()) {
     return tauriInvoke<Conversation>('update_conversation', { id, patch })
@@ -557,11 +561,45 @@ export async function upsertConversationSummary(
     token_estimate: input.token_estimate,
     version: currentVersion + 1,
     updated_at: nowIso(),
+    // Owned by its own writer; folding a summary must never blank it.
+    scene: idx >= 0 ? all[idx].scene : '',
   }
   if (idx >= 0) all[idx] = next
   else all.push(next)
   writeLocal(STORAGE_KEYS.summaries, all)
   return next
+}
+
+/**
+ * Writes only the scene. Leaves `version` untouched on purpose — the summarizer's
+ * optimistic check reads it, and bumping it here would make every background summary
+ * write lose its race from then on.
+ */
+export async function setConversationScene(
+  conversationId: string,
+  scene: string,
+): Promise<void> {
+  if (isTauri()) {
+    return tauriInvoke('set_conversation_scene', { conversationId, scene })
+  }
+  const all = readLocal<ConversationSummary[]>(STORAGE_KEYS.summaries, [])
+  const idx = all.findIndex((x) => x.conversation_id === conversationId)
+  if (idx >= 0) {
+    all[idx] = { ...all[idx], scene }
+  } else {
+    all.push({
+      conversation_id: conversationId,
+      summary: '',
+      summarized_up_to_message_id: null,
+      summarized_up_to_created_at: null,
+      message_count: 0,
+      token_estimate: 0,
+      version: 0,
+      updated_at: nowIso(),
+      scene,
+    })
+  }
+  writeLocal(STORAGE_KEYS.summaries, all)
 }
 
 export async function clearConversationSummary(

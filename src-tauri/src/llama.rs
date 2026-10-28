@@ -164,6 +164,12 @@ impl LlamaManager {
             .arg(port.to_string())
             .arg("--n-gpu-layers")
             .arg(gpu.to_string())
+            // Without this the server's default (-1, auto) may split --ctx-size across
+            // several slots, so a 4096 window silently becomes 2048 per request. The app
+            // reads the per-slot n_ctx back from /props and would quietly pack half the
+            // history, which the user experiences only as "it forgets fast".
+            .arg("--parallel")
+            .arg("1")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

@@ -81,6 +81,8 @@ export interface Conversation {
   character_id: string | null
   created_at: string
   updated_at: string
+  /** The user's own steer for this scene, injected near the generation point. */
+  scene_note: string
 }
 
 /** Metadata for a generated image attached to an image-role message */
@@ -179,6 +181,8 @@ export interface ConversationSummary {
   token_estimate: number
   version: number
   updated_at: string
+  /** Where the scene physically is. Written by its own pass, independent of `version`. */
+  scene: string
 }
 
 export interface UpsertSummaryInput {
@@ -247,6 +251,15 @@ export interface AppSettings {
 
   // Group conversations
   group_replies_per_turn: number
+
+  /**
+   * Character sampling. DRY suppresses repeated phrases rather than repeated tokens;
+   * XTC drops the most likely continuation part of the time, trading a little coherence
+   * for prose that does not reach for the stock phrase.
+   */
+  dry_multiplier: number
+  xtc_probability: number
+  xtc_threshold: number
 }
 
 export type EngineStatus =

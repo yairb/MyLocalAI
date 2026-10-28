@@ -24,8 +24,14 @@ import {
   parseExampleExchange,
   type WritableField,
 } from '@/services/characterWriter'
-import { buildSystemPrompt, hasRichPersona } from '@/services/personaPrompt'
+import {
+  buildDepthNote,
+  buildSystemPrompt,
+  hasRichPersona,
+} from '@/services/personaPrompt'
+import { createEstimator } from '@/services/contextBudget'
 import { useCharacterStore } from '@/stores/characterStore'
+import { useEngineStore } from '@/stores/engineStore'
 import { useAvatarStore } from '@/stores/avatarStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Avatar } from '@/components/UI/Avatar'
@@ -106,6 +112,8 @@ export function CharacterStudio({
   const update = useCharacterStore((s) => s.update)
   const setActive = useCharacterStore((s) => s.setActive)
   const activeId = useSettingsStore((s) => s.settings?.active_character_id)
+  const contextWindow = useEngineStore((s) => s.contextWindow)
+  const charsPerToken = useEngineStore((s) => s.charsPerToken)
   const generateAvatar = useAvatarStore((s) => s.generate)
   const generatingFor = useAvatarStore((s) => s.generatingFor)
   const avatarError = useAvatarStore((s) => s.error)
@@ -142,13 +150,42 @@ export function CharacterStudio({
 
   // Live preview of exactly what the model will be given. Cheap, because
   // buildSystemPrompt is pure — and the only way this is debuggable at all.
-  const preview = useMemo(
-    () =>
-      buildSystemPrompt({
-        character: { ...draft, id: character?.id ?? 'preview', created_at: '' },
-      }),
-    [draft, character?.id],
-  )
+  //
+  // The depth note is shown with it, and counted with it. It is not part of the system
+  // prompt — it is injected next to the turn being answered — but it carries rules that
+  // used to live here, so leaving it out would make the preview look thinner than what
+  // the model actually gets and under-report what the persona costs.
+  const preview = useMemo(() => {
+    const previewCharacter = {
+      ...draft,
+      id: character?.id ?? 'preview',
+      created_at: '',
+    }
+    const system = buildSystemPrompt({ character: previewCharacter })
+    const note = buildDepthNote({ character: previewCharacter })
+    return note
+      ? `${system}\n\n--- sent again next to the latest turn ---\n${note}`
+      : system
+  }, [draft, character?.id])
+
+  // What the persona costs, measured with the same estimator and the same reservation
+  // arithmetic `packContext` uses — a parallel calculation here would drift and start
+  // lying. A character who eats half the window is the real cause of "it forgets fast".
+  const budget = useMemo(() => {
+    const estimator = createEstimator(charsPerToken ?? undefined)
+    const window = contextWindow ?? 4096
+    const personaTokens = estimator.estimate(preview)
+    const reservation = Math.max(64, Math.floor(window * 0.25))
+    const forHistory = Math.max(0, window - reservation - personaTokens)
+    return { personaTokens, window, forHistory }
+  }, [preview, charsPerToken, contextWindow])
+
+  const budgetTone =
+    budget.personaTokens > 1200
+      ? 'text-danger'
+      : budget.personaTokens > 900
+        ? 'text-amber-400'
+        : 'text-muted'
 
   const nameOk = draft.name.trim().length > 0
   // Either a compiled persona or a hand-written prompt is enough; requiring both
@@ -646,6 +683,11 @@ export function CharacterStudio({
                   <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-card/40 p-3.5 font-mono text-[11px] leading-relaxed text-muted">
                     {preview}
                   </pre>
+                  <p className={cn('mt-1.5 text-[11px]', budgetTone)}>
+                    ≈ {budget.personaTokens.toLocaleString()} tokens · leaves ~
+                    {budget.forHistory.toLocaleString()} for the conversation in a{' '}
+                    {budget.window.toLocaleString()} window
+                  </p>
                 </div>
               </>
             )}

@@ -28,7 +28,7 @@ Rules:
 /** Turns left raw in the live window and therefore not folded into the summary yet. */
 export const KEEP_RAW_TAIL = 8
 
-const REFUSAL_MARKERS = [
+export const REFUSAL_MARKERS = [
   "i'm sorry",
   'i am sorry',
   'as an ai',

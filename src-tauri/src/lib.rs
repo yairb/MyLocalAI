@@ -94,6 +94,7 @@ pub fn run() {
             commands::delete_memories_for_character,
             commands::get_conversation_summary,
             commands::upsert_conversation_summary,
+            commands::set_conversation_scene,
             commands::clear_conversation_summary,
             commands::count_images_of_kind,
             commands::save_character_avatar,

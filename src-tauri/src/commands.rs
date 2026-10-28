@@ -237,6 +237,15 @@ pub fn upsert_conversation_summary(
 }
 
 #[tauri::command]
+pub fn set_conversation_scene(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    scene: String,
+) -> Result<(), String> {
+    state.db.set_conversation_scene(&conversation_id, &scene)
+}
+
+#[tauri::command]
 pub fn clear_conversation_summary(
     state: State<'_, AppState>,
     conversation_id: String,

@@ -15,8 +15,10 @@ import {
 } from '@/services/imageGeneration'
 import { runImageGeneration } from '@/services/imagePipeline'
 import {
+  buildDepthNote,
   buildSystemPrompt,
   resolveGenerationParams,
+  DEPTH_NOTE_DEPTH,
 } from '@/services/personaPrompt'
 import {
   createEstimator,
@@ -109,6 +111,19 @@ function stripOwnName(text: string, name: string): string {
   return text.replace(new RegExp(`^\\s*${escaped}\\s*:\\s*`, 'i'), '').trim()
 }
 
+/**
+ * Hours between two messages. A character resuming mid-sentence three days later is the
+ * most immersion-breaking artefact a chat app has, and the gap is already on every row.
+ */
+function hoursBetween(
+  earlier: string | undefined,
+  later: string | undefined,
+): number {
+  if (!earlier || !later) return 0
+  const ms = new Date(later).getTime() - new Date(earlier).getTime()
+  return Number.isFinite(ms) && ms > 0 ? ms / 3_600_000 : 0
+}
+
 /** Persists the character's opening line so it is part of history, not just UI. */
 async function ensureGreeting(
   conversationId: string,
@@ -163,6 +178,7 @@ interface ChatState {
   newChat: (characterId?: string) => Promise<void>
   setConversationParticipants: (characterIds: string[]) => Promise<void>
   renameConversation: (id: string, title: string) => Promise<void>
+  setSceneNote: (id: string, sceneNote: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   setConversationCharacter: (conversationId: string, characterId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
@@ -307,6 +323,12 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     renameConversation: async (id, title) => {
       await db.updateConversation(id, { title })
+      const conversations = await db.listConversations()
+      set({ conversations })
+    },
+
+    setSceneNote: async (id, sceneNote) => {
+      await db.updateConversation(id, { scene_note: sceneNote })
       const conversations = await db.listConversations()
       set({ conversations })
     },
@@ -653,7 +675,25 @@ export const useChatStore = create<ChatState>((set, get) => {
       settings ?? null,
       settings?.user_name,
       others,
+      messages.length,
     )
+
+    // The directive that rides near the generation point. The persona is at the top of
+    // a 4096-token window, which is exactly where this model stops looking once a scene
+    // is a dozen turns long.
+    const conversation = get().conversations.find((c) => c.id === conversationId)
+    const lastMessage = messages[messages.length - 1]
+    const depthNote = buildDepthNote({
+      character: speaker,
+      userName: settings?.user_name,
+      others,
+      scene: summaryRow?.scene ?? null,
+      sceneNote: conversation?.scene_note ?? null,
+      hoursSinceLastMessage: hoursBetween(
+        messages[messages.length - 2]?.created_at,
+        lastMessage?.created_at,
+      ),
+    })
 
     const packed = packContext({
       contextWindow,
@@ -671,11 +711,13 @@ export const useChatStore = create<ChatState>((set, get) => {
               characterName: (id) => characters.getById(id)?.name ?? null,
             })
         : renderForModel,
+      depthNote: depthNote ? { content: depthNote, depth: DEPTH_NOTE_DEPTH } : null,
     })
 
-    const chatMessages = isGroup
-      ? coalesce(packed.chatMessages)
-      : [...packed.chatMessages]
+    // Always coalesced now, not just in a group: the depth note goes in as a `user`
+    // turn, and folding it into the neighbouring one keeps the transcript strictly
+    // alternating whatever chat template the loaded GGUF turns out to carry.
+    const chatMessages = coalesce(packed.chatMessages)
 
     const baseUrl = buildBaseUrl(
       settings?.llama_host ?? '127.0.0.1',
@@ -693,16 +735,10 @@ export const useChatStore = create<ChatState>((set, get) => {
       await streamChatCompletion({
         baseUrl,
         messages: chatMessages,
-        temperature: params.temperature,
-        top_p: params.top_p,
+        // Every GenerationParams field is a sampling knob, so spreading keeps this call
+        // honest when one is added rather than silently dropping it.
+        ...params,
         max_tokens: Math.min(params.max_tokens, packed.replyReservation),
-        repeat_penalty: params.repeat_penalty,
-        repeat_last_n: params.repeat_last_n,
-        presence_penalty: params.presence_penalty,
-        frequency_penalty: params.frequency_penalty,
-        min_p: params.min_p,
-        top_k: params.top_k,
-        stop: params.stop,
         signal: abortController.signal,
         onToken: (token) => {
           rawReply += token

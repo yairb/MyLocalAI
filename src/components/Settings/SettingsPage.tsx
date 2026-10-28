@@ -693,6 +693,45 @@ export function SettingsPage({ onBack, onOpenCharacters }: SettingsPageProps) {
 
                 <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
                   <div>
+                    <p className="text-sm font-medium text-white">Writing</p>
+                    <p className="mt-1 text-xs text-muted">
+                      How hard the model is pushed away from repeating itself. Phrase
+                      repetition catches a sentence it has already used. Surprise drops
+                      the most obvious next word some of the time — it makes prose less
+                      stock, but it is also the first thing to break a character's
+                      quotes-and-asterisks habit, so it starts off.
+                    </p>
+                  </div>
+                  <RangeField
+                    label="Phrase repetition"
+                    value={settings.dry_multiplier}
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    onChange={(dry_multiplier) => void update({ dry_multiplier })}
+                    display={
+                      settings.dry_multiplier === 0
+                        ? 'off'
+                        : settings.dry_multiplier.toFixed(1)
+                    }
+                  />
+                  <RangeField
+                    label="Surprise"
+                    value={settings.xtc_probability}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onChange={(xtc_probability) => void update({ xtc_probability })}
+                    display={
+                      settings.xtc_probability === 0
+                        ? 'off'
+                        : settings.xtc_probability.toFixed(2)
+                    }
+                  />
+                </div>
+
+                <div className="space-y-5 rounded-2xl border border-border bg-card/40 p-5">
+                  <div>
                     <p className="text-sm font-medium text-white">Group chats</p>
                     <p className="mt-1 text-xs text-muted">
                       Add more characters to a chat from the name at the top of the

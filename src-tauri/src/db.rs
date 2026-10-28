@@ -307,6 +307,23 @@ impl Database {
         // Which character said it. Null for user messages and for replies written
         // before group chats existed, where the conversation's own character answers.
         ensure_column(&conn, "messages", "character_id", "TEXT")?;
+        // The user's own steer for a scene. Safe on `conversations`: `update_conversation`
+        // reads the row before writing it back, and `touch_conversation` only sets
+        // `updated_at`, so neither can drop it.
+        ensure_column(
+            &conn,
+            "conversations",
+            "scene_note",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        // Where the scene physically is. Written by its own background pass, so it lives
+        // beside the summary rather than on `conversations`.
+        ensure_column(
+            &conn,
+            "conversation_summaries",
+            "scene",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
         ensure_column(&conn, "generated_images", "caption", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(
             &conn,
@@ -404,7 +421,7 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, title, character_id, created_at, updated_at
+                "SELECT id, title, character_id, created_at, updated_at, scene_note
                  FROM conversations ORDER BY updated_at DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -416,6 +433,7 @@ impl Database {
                     character_id: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
+                    scene_note: row.get(5)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -443,6 +461,7 @@ impl Database {
             character_id,
             created_at: ts.clone(),
             updated_at: ts,
+            scene_note: String::new(),
         })
     }
 
@@ -454,7 +473,8 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut conv = conn
             .query_row(
-                "SELECT id, title, character_id, created_at, updated_at FROM conversations WHERE id = ?1",
+                "SELECT id, title, character_id, created_at, updated_at, scene_note
+                 FROM conversations WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok(Conversation {
@@ -463,6 +483,7 @@ impl Database {
                         character_id: row.get(2)?,
                         created_at: row.get(3)?,
                         updated_at: row.get(4)?,
+                        scene_note: row.get(5)?,
                     })
                 },
             )
@@ -474,11 +495,22 @@ impl Database {
         if let Some(character_id) = patch.character_id {
             conv.character_id = Some(character_id);
         }
+        if let Some(scene_note) = patch.scene_note {
+            conv.scene_note = scene_note;
+        }
         conv.updated_at = now();
 
         conn.execute(
-            "UPDATE conversations SET title = ?1, character_id = ?2, updated_at = ?3 WHERE id = ?4",
-            params![conv.title, conv.character_id, conv.updated_at, conv.id],
+            "UPDATE conversations
+                SET title = ?1, character_id = ?2, updated_at = ?3, scene_note = ?4
+              WHERE id = ?5",
+            params![
+                conv.title,
+                conv.character_id,
+                conv.updated_at,
+                conv.scene_note,
+                conv.id
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(conv)
@@ -751,7 +783,8 @@ impl Database {
         let pattern = format!("%{}%", query);
         let mut stmt = conn
             .prepare(
-                "SELECT DISTINCT c.id, c.title, c.character_id, c.created_at, c.updated_at
+                "SELECT DISTINCT c.id, c.title, c.character_id, c.created_at, c.updated_at,
+                        c.scene_note
                  FROM conversations c
                  LEFT JOIN messages m ON m.conversation_id = c.id
                  LEFT JOIN generated_images g ON g.conversation_id = c.id
@@ -770,6 +803,7 @@ impl Database {
                     character_id: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
+                    scene_note: row.get(5)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -1199,7 +1233,8 @@ impl Database {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.query_row(
             "SELECT conversation_id, summary, summarized_up_to_message_id,
-                    summarized_up_to_created_at, message_count, token_estimate, version, updated_at
+                    summarized_up_to_created_at, message_count, token_estimate, version,
+                    updated_at, scene
              FROM conversation_summaries WHERE conversation_id = ?1",
             params![conversation_id],
             |row| {
@@ -1212,6 +1247,7 @@ impl Database {
                     token_estimate: row.get(5)?,
                     version: row.get(6)?,
                     updated_at: row.get(7)?,
+                    scene: row.get(8)?,
                 })
             },
         )
@@ -1265,6 +1301,25 @@ impl Database {
             .map_err(|e| e.to_string())?;
         }
         self.get_conversation_summary(&input.conversation_id)
+    }
+
+    /// Writes only the scene. Deliberately leaves `version` alone — `summarizeConversation`
+    /// passes an `expected_version` it read before running the model, and bumping it here
+    /// would make every background summary write lose its race from then on.
+    pub fn set_conversation_scene(
+        &self,
+        conversation_id: &str,
+        scene: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO conversation_summaries (conversation_id, scene, version, updated_at)
+             VALUES (?1, ?2, 0, ?3)
+             ON CONFLICT(conversation_id) DO UPDATE SET scene = excluded.scene",
+            params![conversation_id, scene, now()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn clear_conversation_summary(&self, conversation_id: &str) -> Result<(), String> {

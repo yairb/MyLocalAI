@@ -16,6 +16,21 @@ export interface SamplingOptions {
   min_p?: number
   top_k?: number
   stop?: string[]
+  /**
+   * DRY penalises a repeated *sequence* — an n-gram that continues a match already in
+   * the context — instead of an individual token. That is the difference between
+   * suppressing "she bit her lip" for the fourth time and suppressing the word "she".
+   */
+  dry_multiplier?: number
+  dry_base?: number
+  dry_allowed_length?: number
+  dry_penalty_last_n?: number
+  dry_sequence_breakers?: string[]
+  /** XTC drops the most likely continuation part of the time, which is where cliches live. */
+  xtc_probability?: number
+  xtc_threshold?: number
+  /** Explicit sampler chain, in order. XTC has to run after min_p and before temperature. */
+  samplers?: string[]
 }
 
 export interface StreamOptions extends SamplingOptions {
@@ -41,6 +56,17 @@ function samplingBody(options: SamplingOptions): Record<string, unknown> {
     ['min_p', options.min_p],
     ['top_k', options.top_k],
     ['stop', options.stop?.length ? options.stop : undefined],
+    ['dry_multiplier', options.dry_multiplier],
+    ['dry_base', options.dry_base],
+    ['dry_allowed_length', options.dry_allowed_length],
+    ['dry_penalty_last_n', options.dry_penalty_last_n],
+    [
+      'dry_sequence_breakers',
+      options.dry_sequence_breakers?.length ? options.dry_sequence_breakers : undefined,
+    ],
+    ['xtc_probability', options.xtc_probability],
+    ['xtc_threshold', options.xtc_threshold],
+    ['samplers', options.samplers?.length ? options.samplers : undefined],
   ]
   return Object.fromEntries(entries.filter(([, v]) => v !== undefined))
 }

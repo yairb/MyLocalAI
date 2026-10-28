@@ -3,9 +3,11 @@ import * as db from '@/services/database'
 import { buildBaseUrl } from '@/services/llamaClient'
 import { useEngineStore } from '@/stores/engineStore'
 import { extractFacts } from './facts'
+import { refreshScene } from './scene'
 import { summarizeConversation, uncoveredMessages } from './summarizer'
 
 export { selectMemories } from './select'
+export { refreshScene } from './scene'
 export { effectiveImportance } from './facts'
 export { keywordString, extractKeywords } from './keywords'
 export { uncoveredMessages } from './summarizer'
@@ -18,6 +20,12 @@ export { uncoveredMessages } from './summarizer'
 
 /** Cheap guard so one very long message still triggers a fold. */
 const MIN_UNCOVERED_MESSAGES = 12
+
+/**
+ * The scene moves far faster than the summary does, so it gets its own, much lower
+ * threshold. Folding every twelve turns is right for memory and useless for continuity.
+ */
+const MIN_UNCOVERED_FOR_SCENE = 4
 
 const inFlight = new Map<string, Promise<void>>()
 /** Conversations whose memory work was skipped because the engine was paused. */
@@ -61,7 +69,9 @@ export async function scheduleMemoryWork(input: MemoryWorkInput): Promise<void> 
 
   const summary = await db.getConversationSummary(conversationId)
   const uncovered = uncoveredMessages(input.messages, summary)
-  if (uncovered.length < MIN_UNCOVERED_MESSAGES) return
+  const wantsScene = uncovered.length >= MIN_UNCOVERED_FOR_SCENE
+  const wantsFold = uncovered.length >= MIN_UNCOVERED_MESSAGES
+  if (!wantsScene && !wantsFold) return
 
   const baseUrl = buildBaseUrl(settings.llama_host, settings.llama_port)
   controller = new AbortController()
@@ -69,6 +79,22 @@ export async function scheduleMemoryWork(input: MemoryWorkInput): Promise<void> 
 
   const run = (async () => {
     try {
+      // Scene first: it is the cheapest of the three and the one the next reply
+      // actually reads, so it should win if the user types again and the run is cut
+      // short by `cancelBackgroundWork`.
+      if (wantsScene) {
+        await refreshScene({
+          conversationId,
+          characters: input.characters,
+          userName: settings.user_name || 'the user',
+          messages: input.messages,
+          baseUrl,
+          signal,
+        })
+      }
+
+      if (signal.aborted || !wantsFold) return
+
       await summarizeConversation({
         conversationId,
         character,

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, ChevronDown, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, ChevronDown, Clapperboard, Users } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { useCharacterStore } from '@/stores/characterStore'
@@ -33,8 +33,28 @@ export function ChatArea({ onOpenSettings, onOpenCharacters }: ChatAreaProps) {
   const participantIds = useChatStore((s) => s.participantIds)
   const setParticipants = useChatStore((s) => s.setConversationParticipants)
   const speakingCharacterId = useChatStore((s) => s.speakingCharacterId)
+  const conversations = useChatStore((s) => s.conversations)
+  const setSceneNote = useChatStore((s) => s.setSceneNote)
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [sceneOpen, setSceneOpen] = useState(false)
   const phaseLabel = PHASE_LABEL[turnPhase]
+
+  const conversation = conversations.find((c) => c.id === activeConversationId)
+  const savedSceneNote = conversation?.scene_note ?? ''
+  const [sceneDraft, setSceneDraft] = useState(savedSceneNote)
+
+  // The draft follows the conversation, not the keystroke: reopening the popover or
+  // switching chats should show what is actually stored.
+  useEffect(() => {
+    setSceneDraft(savedSceneNote)
+  }, [savedSceneNote, activeConversationId])
+
+  const commitSceneNote = () => {
+    if (!activeConversationId) return
+    const next = sceneDraft.trim()
+    if (next === savedSceneNote) return
+    void setSceneNote(activeConversationId, next)
+  }
 
   const cast = participantIds
     .map((id) => characters.find((c) => c.id === id))
@@ -150,7 +170,65 @@ export function ChatArea({ onOpenSettings, onOpenCharacters }: ChatAreaProps) {
           )}
         </div>
 
-        <div className="titlebar-no-drag flex items-center gap-2">
+        <div className="titlebar-no-drag relative flex items-center gap-2">
+          {activeConversationId && (
+            <>
+              <button
+                onClick={() => setSceneOpen((v) => !v)}
+                title="Scene note — a steer the character reads every turn"
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition',
+                  savedSceneNote
+                    ? 'bg-accent-soft text-accent'
+                    : 'bg-card text-muted hover:text-white',
+                )}
+              >
+                <Clapperboard className="h-3 w-3" />
+                <span className="hidden sm:inline">Scene</span>
+              </button>
+              {sceneOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => {
+                      commitSceneNote()
+                      setSceneOpen(false)
+                    }}
+                  />
+                  <div className="absolute right-0 top-9 z-50 w-80 rounded-xl border border-border bg-sidebar p-3 shadow-2xl shadow-black/40">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-dim">
+                      Scene note
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Something true about right now — the weather, a mood, what just
+                      happened offstage. It is read on every turn, not spoken aloud.
+                    </p>
+                    <textarea
+                      value={sceneDraft}
+                      onChange={(e) => setSceneDraft(e.target.value)}
+                      onBlur={commitSceneNote}
+                      maxLength={240}
+                      rows={3}
+                      placeholder="It has started raining. She is still annoyed about earlier."
+                      className="mt-2 w-full resize-none rounded-lg border border-border bg-card px-2.5 py-2 text-sm text-white outline-none placeholder:text-muted-dim focus:border-accent"
+                    />
+                    <div className="mt-1 flex items-center justify-between text-[11px] text-muted-dim">
+                      <span>{sceneDraft.length}/240</span>
+                      <button
+                        onClick={() => {
+                          commitSceneNote()
+                          setSceneOpen(false)
+                        }}
+                        className="text-accent transition hover:text-white"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          )}
           {phaseLabel && (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[11px] font-medium text-accent">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
